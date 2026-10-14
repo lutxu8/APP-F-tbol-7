@@ -899,10 +899,11 @@ function viewSettings() {
     </div>
   </section>
   <section class="card">
-    <h2>Copia de seguridad</h2>
-    <p class="muted small">Los datos se guardan solo en este teléfono. Exporta de vez en cuando una copia (o para pasársela a otro compañero).</p>
+    <h2>Compartir y copia de seguridad</h2>
+    <p class="muted small">Los datos se guardan solo en este teléfono. <b>Exportar</b> crea un archivo con la plantilla, los partidos y los ajustes que puedes enviar (WhatsApp, AirDrop, correo...) o guardar en Archivos.</p>
+    <p class="muted small">Para cargarlo en otro móvil: guarda el archivo en la app <b>Archivos</b>, abre esta app y pulsa <b>Importar</b>. Ojo: importar <b>sustituye</b> todos los datos de ese móvil por los del archivo.</p>
     <div class="toolbar">
-      <button class="btn" data-action="export">⬇️ Exportar</button>
+      <button class="btn" data-action="export">📤 Exportar / compartir</button>
       <label class="btn">⬆️ Importar<input type="file" accept="application/json,.json" data-action="import" hidden></label>
     </div>
   </section>
@@ -1068,11 +1069,22 @@ const actions = {
     ui.modal = null; persist(); render();
   },
   // Ajustes
-  export: () => {
+  export: async () => {
+    const name = `futbol7-copia-${today()}.json`;
     const blob = new Blob([exportJSON(db)], { type: 'application/json' });
+    // En el iPhone: menú de compartir (WhatsApp, AirDrop, Correo, Guardar en Archivos...).
+    try {
+      const file = new File([blob], name, { type: 'application/json' });
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Datos Fútbol 7' });
+        return;
+      }
+    } catch (e) {
+      if (e?.name === 'AbortError') return; // cancelado por el usuario
+    }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `futbol7-copia-${today()}.json`;
+    a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   },
@@ -1105,10 +1117,12 @@ document.addEventListener('change', (e) => {
   }
   if (el.dataset.action === 'import') {
     const file = el.files?.[0];
+    el.value = ''; // permite volver a elegir el mismo archivo
     if (!file) return;
     file.text().then((text) => {
       try {
-        if (!confirm('Se sustituirán los datos actuales por los de la copia. ¿Seguir?')) return;
+        const msg = `Se sustituirán TODOS los datos de este móvil (plantilla, partidos y ajustes) por los del archivo «${file.name}».${db.live ? ' El partido en curso se perderá.' : ''} ¿Seguir?`;
+        if (!confirm(msg)) return;
         db = importJSON(db, text); persist(); ui.setupStep = 1; render();
         alert('Datos importados.');
       } catch (err) { alert('No se pudo importar: ' + err.message); }
