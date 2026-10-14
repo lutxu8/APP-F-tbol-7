@@ -177,3 +177,31 @@ test('aviso de posición con pocos jugadores', () => {
   assert.equal(w.length, 1);
   assert.deepEqual(w[0].names, ['Ana']);
 });
+
+test('primera remesa fijada y después automático: minutos iguales y nadie sale con menos de 5 min', () => {
+  const ALL = ['LI', 'DFC', 'LD', 'MED', 'DEL'];
+  const slots = FORMATIONS['3-2-1'].slots;
+  for (const n of [9, 10, 11, 12]) {
+    const players = [{ id: 'gk', positions: ['POR'] }, ...Array.from({ length: n - 1 }, (_, i) => ({ id: 'p' + i, positions: ALL }))].map((p) => ({ ...p, played: 0 }));
+    const lineup = optimizeLineup({ slots, players, gkCommitMin: 25 });
+    const base = { slots, players, lineup, phase: 'pre', halfLen: HALF, gkHalftimeOnly: true };
+    const { points } = chooseSchedule(base, { firstSec: 480 });
+    assert.deepEqual(points[0], { h: 1, t: 480 });
+    const r = planMatch({ ...base, points });
+    assert.equal(r.changes.reduce((a, c) => a + c.shortOuts, 0), 0);
+    const f = players.slice(1).map((p) => r.projected[p.id] / 60);
+    assert.ok(Math.max(...f) - Math.min(...f) <= 3, `n=${n}: ${f.map((x) => x.toFixed(1)).join(', ')}`);
+  }
+});
+
+test('no se quita a quien lleva menos de 5 min si se puede evitar', () => {
+  const slots = FORMATIONS['3-2-1'].slots;
+  const ALL = ['LI', 'DFC', 'LD', 'MED', 'DEL'];
+  const players = [{ id: 'gk', positions: ['POR'], played: 600 }, ...Array.from({ length: 9 }, (_, i) => ({ id: 'p' + i, positions: ALL, played: 600, stint: 600 }))];
+  players[1].stint = 120; // p0 acaba de entrar
+  players[1].played = 700;
+  const lineup = { POR: 'gk', DEF1: 'p0', DEF2: 'p1', DEF3: 'p2', MED1: 'p3', MED2: 'p4', DEL1: 'p5' };
+  players.slice(7).forEach((p) => { p.played = 300; p.stint = null; });
+  const after = optimizeLineup({ slots, players, current: lineup, gapMin: 5, hysteresisMin: 1 });
+  assert.ok(Object.values(after).includes('p0'), 'p0 sigue en el campo');
+});

@@ -105,15 +105,18 @@ export function hungarian(cost) {
  *   quien menos lleva.
  * - El portero se compromete `gkCommitMin` minutos (p. ej. la parte entera).
  * - `hysteresisMin`: ventaja para quien ya está en el campo (evita cambios por diferencias mínimas).
- * - Respeta posiciones; fuera de posición solo si no hay otra opción.
+ * Prioridades: 1) minutos iguales, 2) no quitar a quien lleva menos de
+ * `minStintMin` en el campo, 3) posiciones (misma línea antes que otra línea).
+ * La portería solo la ocupa un portero salvo que no haya ninguno.
  * - `lockGK`: el portero actual no se mueve.
  *
- * players: [{ id, positions: ['DFC', ...], played: segundos, tie?: número }]
+ * players: [{ id, positions: ['DFC', ...], played: segundos, stint?: segundos en el campo desde que entró, tie?: número }]
  * current: { slotId: playerId | null }
  * Devuelve { slotId: playerId | null }.
  */
 export function optimizeLineup({
   slots, players, current = {}, lockGK = false, gapMin = 6, gkCommitMin = null, hysteresisMin = 2, movePenaltyMin = 0.5,
+  minStintMin = 5, stintPenaltyMin = 6, linePenaltyMin = 3, offPenaltyMin = 8,
 }) {
   const slotOf = {};
   const ids = new Set(players.map((p) => p.id));
@@ -135,7 +138,10 @@ export function optimizeLineup({
     const row = new Array(n);
     for (let c = 0; c < n; c++) {
       if (c >= S) { // banquillo
-        row[c] = r.id && r.id === lockedGK ? BIG : 0;
+        if (r.id && r.id === lockedGK) row[c] = BIG;
+        // Quitar a quien acaba de entrar (menos de minStintMin) penaliza.
+        else if (slotOf[r.id] && r.stint != null && r.stint < minStintMin * 60) row[c] = 2 * g * stintPenaltyMin;
+        else row[c] = 0;
         continue;
       }
       const slot = slots[c];
@@ -153,9 +159,10 @@ export function optimizeLineup({
         if (cs !== slot.id) v += 2 * g * (slot.role === 'POR' || roleOfSlot[cs] === 'POR' ? 3 : movePenaltyMin);
       }
       const fit = fitFor(r.positions, slot);
-      // Misma línea, otra posición: se acepta si evita una diferencia de minutos de unos 5'.
-      if (fit === 'line') v += 2 * g * 5;
-      else if (fit === 'no') v += slot.role === 'POR' ? 3 * OUT : OUT;
+      // Las posiciones ceden ante la igualdad de minutos: misma línea si evita ~3' de
+      // diferencia, otra línea si evita ~8'. La portería, solo porteros.
+      if (fit === 'line') v += 2 * g * linePenaltyMin;
+      else if (fit === 'no') v += slot.role === 'POR' ? 3 * OUT : 2 * g * offPenaltyMin;
       row[c] = v;
     }
     return row;
@@ -192,11 +199,11 @@ export function intervalPoints(halfLenSec, intervalSec, minGapSec = 120) {
  * se pasan al descanso. Devuelve [{h, t}]; el descanso ({h: 2, t: 0}) solo se
  * incluye si coincide con un cambio de tramo.
  */
-export function windowPoints(halfLenSec, windows, minGapSec = 90) {
+export function windowPoints(halfLenSec, windows, minGapSec = 90, startSec = 0) {
   const total = halfLenSec * 2;
   const pts = [];
   for (let k = 1; k < windows; k++) {
-    const g = Math.round((total * k) / windows);
+    const g = Math.round(startSec + ((total - startSec) * k) / windows);
     if (g < halfLenSec - minGapSec) pts.push({ h: 1, t: g });
     else if (g < halfLenSec + minGapSec) {
       if (!pts.some((p) => p.h === 2 && p.t === 0)) pts.push({ h: 2, t: 0 });
@@ -206,6 +213,11 @@ export function windowPoints(halfLenSec, windows, minGapSec = 90) {
 }
 
 export const pointKey = (p) => `${p.h}-${p.t}`;
+
+/** Segundo "nominal" del partido (sin tiempo añadido) → momento {h, t}. */
+export function nominalToPoint(g, halfLenSec) {
+  return g < halfLenSec ? { h: 1, t: Math.round(g) } : { h: 2, t: Math.round(g - halfLenSec) };
+}
 
 function avgGapSec(points, halfLen) {
   const n = points.filter((p) => !(p.h === 2 && p.t === 0)).length;
@@ -223,7 +235,8 @@ function scorePlan(plan) {
   const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / (vals.length || 1);
   const subs = plan.changes.reduce((a, c) => a + c.subs.length, 0);
   const events = plan.changes.filter((c) => c.subs.length).length;
-  return variance + 0.03 * subs + 0.1 * events;
+  const short = plan.changes.reduce((a, c) => a + (c.shortOuts || 0), 0);
+  return variance + 0.5 * short + 0.03 * subs + 0.25 * events;
 }
 
 /**
@@ -232,14 +245,16 @@ function scorePlan(plan) {
  * cambios que aún no han llegado; el descanso no se mueve.
  * `base` son los mismos parámetros que planMatch (sin `points`).
  */
-export function adjustSchedule(base, points, { maxShiftSec = 180, stepSec = 30, minGapSec = 90 } = {}) {
+export function adjustSchedule(base, points, {
+  maxShiftSec = 180, stepSec = 30, minGapSec = 90, fixed = [], nowGapSec = 30, endGapSec = 60,
+} = {}) {
   const handled = base.handled instanceof Set ? base.handled : new Set(base.handled || []);
   const nowH = base.phase === 'h2' || base.phase === 'break' ? 2 : 1;
   const nowT = base.phase === 'h1' || base.phase === 'h2' ? base.halfSec || 0 : 0;
   const halfLen = base.halfLen;
   const isHalftime = (p) => p.h === 2 && p.t === 0;
-  const isFuture = (p) => base.phase === 'pre' || p.h > nowH || (p.h === nowH && p.t > nowT + 30);
-  const cur = points.map((p) => ({ h: p.h, t: p.t, orig: p.t, movable: !isHalftime(p) && !handled.has(pointKey(p)) && isFuture(p) }));
+  const isFuture = (p) => base.phase === 'pre' || p.h > nowH || (p.h === nowH && p.t > nowT + nowGapSec);
+  const cur = points.map((p) => ({ h: p.h, t: p.t, orig: p.t, movable: !isHalftime(p) && !fixed.includes(pointKey(p)) && !handled.has(pointKey(p)) && isFuture(p) }));
   const evalPts = (pts) => scorePlan(planMatch({ ...base, points: pts.map(({ h, t }) => ({ h, t })), handled }));
   let best = evalPts(cur);
   for (let round = 0; round < 4; round++) {
@@ -250,8 +265,8 @@ export function adjustSchedule(base, points, { maxShiftSec = 180, stepSec = 30, 
       for (let d = -maxShiftSec; d <= maxShiftSec; d += stepSec) {
         const t = p.orig + d;
         if (t === p.t) continue;
-        if (t < minGapSec || t > halfLen - 60) continue;
-        if (p.h === nowH && base.phase !== 'pre' && t <= nowT + 30) continue;
+        if (t < minGapSec || t > halfLen - endGapSec) continue;
+        if (p.h === nowH && base.phase !== 'pre' && t < nowT + nowGapSec) continue;
         if (cur.some((q, j) => j !== i && q.h === p.h && Math.abs(q.t - t) < minGapSec)) continue;
         const old = p.t;
         p.t = t;
@@ -269,14 +284,30 @@ export function adjustSchedule(base, points, { maxShiftSec = 180, stepSec = 30, 
  * deja los minutos más igualados (y, a igualdad, con menos cambios).
  * `base` son los mismos parámetros que planMatch (sin `points`).
  */
-export function chooseSchedule(base, { minWindows = 3, maxWindows = 12 } = {}) {
+export function chooseSchedule(base, { minWindows = 3, maxWindows = 12, firstSec = null, refine = false, current = null } = {}) {
   let best = null;
+  const halfLen = base.halfLen;
   const nowKey = base.phase === 'h2' || base.phase === 'break' ? 2 : 1;
   const nowT = base.phase === 'h1' || base.phase === 'h2' ? base.halfSec || 0 : 0;
-  for (let w = minWindows; w <= maxWindows; w++) {
-    const points = windowPoints(base.halfLen, w);
+  const nowNominal = base.phase === 'pre' ? 0 : (nowKey - 1) * halfLen + Math.min(nowT, halfLen);
+  const handledBase = new Set(base.handled || []);
+  // Primer cambio fijado por el usuario y aún no ha llegado: se respeta y el resto se reparte después.
+  const first = firstSec && firstSec > nowNominal ? nominalToPoint(firstSec, halfLen) : null;
+  const start = first ? firstSec : nowNominal;
+  const range = firstSec ? [1, 10] : [minWindows, maxWindows];
+  const GAP = 180; // mínimo entre remesas
+  for (let w = range[0]; w <= range[1]; w++) {
+    let points;
+    if (start > 0) {
+      if (w > 1 && (2 * halfLen - start) / w < GAP) continue;
+      points = windowPoints(halfLen, w, 150, start)
+        .filter((p) => (p.h === 2 && p.t === 0) || (p.h - 1) * halfLen + p.t >= nowNominal + GAP);
+      if (first) points.unshift(first);
+    } else {
+      points = windowPoints(halfLen, w);
+    }
     // Los puntos ya pasados no cuentan: se dan por hechos.
-    const handled = new Set(base.handled || []);
+    const handled = new Set(handledBase);
     if (base.phase !== 'pre') {
       for (const p of points) {
         if (p.h === 2 && p.t === 0) continue; // el descanso nunca se da por hecho solo
@@ -285,6 +316,17 @@ export function chooseSchedule(base, { minWindows = 3, maxWindows = 12 } = {}) {
     }
     const score = scorePlan(planMatch({ ...base, points, handled }));
     if (!best || score < best.score - 1e-9) best = { score, windows: w, points, handledPast: [...handled] };
+  }
+  if (refine || firstSec) {
+    best.points = adjustSchedule({ ...base, handled: new Set(best.handledPast) }, best.points, {
+      fixed: first ? [pointKey(first)] : [], minGapSec: GAP, nowGapSec: first ? 30 : GAP, endGapSec: 150,
+    });
+    best.score = scorePlan(planMatch({ ...base, points: best.points, handled: new Set(best.handledPast) }));
+  }
+  // El plan vigente también compite: replanificar nunca debe empeorarlo.
+  if (current && base.phase !== 'pre') {
+    const score = scorePlan(planMatch({ ...base, points: current, handled: handledBase }));
+    if (score <= best.score + 1e-9) return { score, windows: 0, points: current, handledPast: [...handledBase], kept: true };
   }
   return best;
 }
@@ -328,7 +370,9 @@ export function diffLineups(before, after) {
  *
  * Devuelve { changes: [{key, keys, half, t, due, halftime, before, after, subs, moves}], projected: {id: segundos} }
  */
-export function planMatch({ slots, players, lineup, phase, halfSec = 0, halfLen, points: basePoints = [], handled = new Set(), gkHalftimeOnly = true }) {
+export function planMatch({
+  slots, players, lineup, phase, halfSec = 0, halfLen, points: basePoints = [], handled = new Set(), gkHalftimeOnly = true, firstStep = {},
+}) {
   handled = handled instanceof Set ? handled : new Set(handled);
   const played = Object.fromEntries(players.map((p) => [p.id, p.played || 0]));
   const avail = new Set(players.map((p) => p.id));
@@ -362,6 +406,9 @@ export function planMatch({ slots, players, lineup, phase, halfSec = 0, halfLen,
 
   const hysteresisMin = hysteresisFor(avgGapSec(basePoints, halfLen));
   const nominal = (p) => (p.h - 1) * halfLen + Math.min(p.t, halfLen);
+  // Desde cuándo (segundo nominal) está cada uno en el campo, para no quitar a quien acaba de entrar.
+  const stintStart = {};
+  for (const p of players) if (Object.values(cur).includes(p.id)) stintStart[p.id] = nominal(pos) - (phase === 'pre' ? 0 : p.stint ?? 1e6);
   const steps = [];
   const hasEmptySlot = slots.some((s) => !cur[s.id]) && players.some((p) => !Object.values(cur).includes(p.id));
   if (due.length || (hasEmptySlot && phase !== 'pre')) {
@@ -392,16 +439,29 @@ export function planMatch({ slots, players, lineup, phase, halfSec = 0, halfLen,
     const after = optimizeLineup({
       slots,
       players: players.map((p, j) => ({
-        id: p.id, positions: p.positions, played: played[p.id] + (point.h === 1 && !point.halftime ? virtual[p.id] || 0 : 0), tie: j,
+        id: p.id,
+        positions: p.positions,
+        played: played[p.id] + (point.h === 1 && !point.halftime ? virtual[p.id] || 0 : 0),
+        stint: stintStart[p.id] != null ? nominal(point) - stintStart[p.id] : null,
+        tie: j,
       })),
       current: cur,
       lockGK,
       gapMin,
       gkCommitMin,
-      hysteresisMin: point.halftime && !halftimeIsBoundary ? hysteresisMin * 3 : hysteresisMin,
+      // Margen para no cambiar por poco: proporcional al tramo que viene (al final del partido, menor).
+      hysteresisMin: (point.halftime && !halftimeIsBoundary ? hysteresisMin * 3 : Math.min(hysteresisMin, hysteresisFor(gapMin * 60)))
+        * (i === 0 ? firstStep.hysteresisMul ?? 1 : 1),
+      ...(i === 0 ? firstStep.opts || {} : {}),
     });
     const { subs, moves } = diffLineups(cur, after);
-    changes.push({ key: point.key, keys: st.keys, half: point.h, t: point.t, due: st.due, halftime: point.halftime, before: cur, after, subs, moves });
+    let shortOuts = 0;
+    for (const sb of subs) {
+      if (sb.out && stintStart[sb.out] != null && nominal(point) - stintStart[sb.out] < 300) shortOuts++;
+      if (sb.out) delete stintStart[sb.out];
+      if (sb.in) stintStart[sb.in] = nominal(point);
+    }
+    changes.push({ key: point.key, keys: st.keys, half: point.h, t: point.t, due: st.due, halftime: point.halftime, before: cur, after, subs, moves, shortOuts });
     cur = after;
   });
   advance({ h: 2, t: halfLen });
@@ -508,4 +568,27 @@ export function positionWarnings(slots, players, halfLenMin = 25) {
     }
   }
   return out;
+}
+
+/**
+ * Como planMatch, pero el cambio que toca ahora se elige mirando al final del
+ * partido: prueba varias combinaciones y se queda con la que deja los minutos
+ * finales más iguales (respetando lo de no quitar a quien lleva menos de 5').
+ */
+export function planMatchBest(params) {
+  const base = planMatch(params);
+  if (!base.changes[0]?.due) return base;
+  let best = base;
+  let bestScore = scorePlan(base);
+  const variants = [
+    { hysteresisMul: 0 }, { hysteresisMul: 0.5 }, { hysteresisMul: 2 }, { hysteresisMul: 4 },
+    { hysteresisMul: 0, opts: { linePenaltyMin: 1.5, offPenaltyMin: 5 } },
+    { hysteresisMul: 1, opts: { stintPenaltyMin: 12 } },
+  ];
+  for (const firstStep of variants) {
+    const plan = planMatch({ ...params, firstStep });
+    const sc = scorePlan(plan);
+    if (sc < bestScore - 1e-6) { best = plan; bestScore = sc; }
+  }
+  return best;
 }

@@ -23,11 +23,14 @@ No necesita servidor ni cuentas: los datos se guardan en el propio teléfono y f
 
 ### Cómo decide los cambios
 
-- En cada cambio busca la mejor combinación de jugadores y puestos (algoritmo húngaro): entran los que menos minutos llevan, cada uno en una posición que sabe jugar (si no hay nadie, primero alguien de la misma línea, p. ej. un LD de lateral izquierdo, y solo como último recurso alguien de otra línea), y procura no mover a quien ya está jugando.
-- En modo **Automático** prueba varios calendarios de cambios y elige el que deja los minutos más iguales con el menor número de cambios. Con un portero fijo, los jugadores de campo acaban con los mismos minutos o casi.
+- Orden de prioridades al decidir los cambios:
+  1. **Que todos jueguen lo mismo.**
+  2. **No quitar a nadie que lleve menos de 5 minutos** en el campo desde que entró.
+  3. **Respetar las posiciones** de cada uno: si hace falta para igualar minutos, primero alguien de la misma línea (p. ej. un LD de lateral izquierdo) y, si no basta, de otra línea. La portería, siempre un portero.
+- En cada remesa busca la mejor combinación de jugadores y puestos (algoritmo húngaro), prueba varias alternativas y se queda con la que deja los minutos finales más iguales. Procura no mover a quien ya está jugando.
+- En modo **Automático** puedes **fijar el minuto de la primera remesa** (por defecto, el 8). A partir de ahí, la app decide cuándo cambiar, y después de cada remesa vuelve a planificar con los minutos reales (por ejemplo, si un cambio se confirmó tarde). Deja al menos 3 minutos entre remesas y no propone cambios en los últimos 2½ minutos de cada parte. Si no fijas la primera remesa, elige también ese momento.
 - Opción *“El portero solo cambia en el descanso”* (activada por defecto). Si hay dos porteros, se reparten las partes, y el que vaya a ser portero en la 2ª parte descansa más en la 1ª.
 - O eliges tú **cada cuántos minutos** se hacen los cambios (de 2 a 20 min), al preparar el partido o en la previa, antes de empezar. Los cambios se hacen en esos minutos de cada parte, y también en el descanso. Con la opción *Ajustar algún cambio (±3 min)* (activada por defecto), la app puede adelantar o retrasar algún cambio hasta 3 minutos para que las cuentas cuadren y todos jueguen lo mismo; en la previa verás los minutos exactos.
-- Si no queda nadie de la posición exacta, puede usar a alguien de la misma línea (p. ej. un central de lateral) cuando eso evita que un jugador acumule bastantes más minutos que el resto.
 
 ## Instalarla en el iPhone
 

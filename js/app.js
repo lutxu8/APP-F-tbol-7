@@ -1,5 +1,5 @@
 import {
-  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, adjustSchedule, positionWarnings, seasonStats, diffLineups,
+  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, planMatchBest, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, adjustSchedule, positionWarnings, seasonStats, diffLineups,
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
@@ -179,7 +179,13 @@ function playedNow(L, pid) {
 function availablePlayers(L) {
   return L.squad
     .filter((id) => !L.unavailable.includes(id) && playerById(id))
-    .map((id) => ({ id, positions: playerById(id).positions || [], played: playedNow(L, id) }));
+    .map((id) => ({
+      id,
+      positions: playerById(id).positions || [],
+      played: playedNow(L, id),
+      // Tiempo en el campo desde que entró (para no quitar a quien lleva menos de 5').
+      stint: L.phase !== 'pre' && onField(L, id) && L.enteredAt[id] != null ? clockNow(L) - L.enteredAt[id] : null,
+    }));
 }
 function planBase(L) {
   return {
@@ -196,7 +202,7 @@ function planBase(L) {
 function recomputeSchedule(L) {
   const base = planBase(L);
   if (L.freq === 'auto') {
-    const best = chooseSchedule(base);
+    const best = chooseSchedule(base, { firstSec: L.firstChange || null, current: L.phase === 'pre' ? null : L.points });
     L.points = best.points;
     L.handled = best.handledPast;
   } else {
@@ -212,13 +218,13 @@ function recomputeSchedule(L) {
 function computePlan() {
   const L = db.live;
   if (!L) return null;
-  let plan = planMatch({ ...planBase(L), points: L.points });
+  let plan = planMatchBest({ ...planBase(L), points: L.points });
   // Un cambio pendiente que no cambia nada se da por hecho.
   let guard = 0;
   while (plan.changes[0]?.due && !plan.changes[0].subs.length && !plan.changes[0].moves.length && plan.changes[0].keys.length && guard++ < 5) {
     L.handled.push(...plan.changes[0].keys);
     persist();
-    plan = planMatch({ ...planBase(L), points: L.points });
+    plan = planMatchBest({ ...planBase(L), points: L.points });
   }
   ui.plan = plan;
   ui.next = plan.changes.find((c) => c.subs.length || c.moves.length) || null;
@@ -249,6 +255,7 @@ function startMatchFromSetup() {
     formation: S.formation,
     freq: S.freq,
     freqAdjust: S.freqAdjust !== false,
+    firstChange: S.firstChange === undefined ? 480 : S.firstChange,
     gkHalftimeOnly: S.gkHalftimeOnly,
     halfLen,
     squad,
@@ -304,6 +311,7 @@ function startHalf(h) {
   } else {
     L.phase = 'h2';
     L.halfStart[2] = L.elapsed;
+    if (L.freq === 'auto') recomputeSchedule(L);
   }
   L.running = true;
   L.anchorTs = Date.now();
@@ -397,7 +405,8 @@ function applyLineup(after, keys, { injuredId = null, manual = false } = {}) {
   for (const s of subs) L.log.push({ half, t: Math.round(halfSecNow(L)), in: s.in, out: s.out, slot: s.slotId, ...(manual ? { manual } : {}), ...(s.out === injuredId ? { injured: true } : {}) });
   for (const m of moves) L.log.push({ half, t: Math.round(halfSecNow(L)), move: m.pid, from: m.from, to: m.to });
   // Con alguien menos o un cambio fuera de plan, se reorganiza el resto del partido.
-  if (injuredId || manual) recomputeSchedule(L);
+  // En automático se replanifica tras cada remesa, con los minutos reales (p. ej. si se cambió tarde).
+  if (injuredId || manual || L.freq === 'auto') recomputeSchedule(L);
   ui.sel = null;
   ui.injured = false;
   persist();
@@ -469,8 +478,15 @@ function undo() {
   render();
 }
 
+let alarmOn = false;
+
 // ---------- vistas ----------
 function render() {
+  // La alarma se enciende/apaga al momento (p. ej. nada más pulsar «Hacer cambios»).
+  if (typeof alarmDue === 'function') {
+    alarmOn = alarmDue();
+    document.body.classList.toggle('alarm', alarmOn);
+  }
   document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === ui.tab));
   document.getElementById('team-name').textContent = db.settings.teamName || 'Fútbol 7';
   let html = '';
@@ -552,7 +568,7 @@ function viewSetup() {
     <h3>Sistema</h3>
     <div class="segmented">${formOpts}</div>
     <h3>Cambios</h3>
-    ${freqControl('setup', S.freq, Math.round((db.settings.halfMinutes || 25) * 60), S.freqAdjust !== false)}
+    ${freqControl('setup', S.freq, Math.round((db.settings.halfMinutes || 25) * 60), S.freqAdjust !== false, null, S.firstChange === undefined ? 480 : S.firstChange)}
     <label class="switch"><input type="checkbox" data-bind="setup.gkHalftimeOnly" ${S.gkHalftimeOnly ? 'checked' : ''}> El portero solo cambia en el descanso</label>
     <div class="toolbar">
       <button class="btn" data-action="setup-back">← Atrás</button>
@@ -573,19 +589,21 @@ function positionWarningTexts(formation, players) {
 }
 
 /** Selector de cada cuántos minutos se hacen los cambios. */
-function freqControl(scope, freq, halfLen, adjust = true, points = null) {
+function freqControl(scope, freq, halfLen, adjust = true, points = null, first = null) {
   const fixed = freq !== 'auto';
   let detail;
-  if (fixed && points && adjust) {
+  if (points && (adjust || !fixed)) {
     // Ya hay plan: se muestran los minutos reales (con el ajuste aplicado).
     const half = (h) => points.filter((p) => p.h === h && !(h === 2 && p.t === 0)).map((p) => mmss(p.t));
     const h1 = half(1);
     const h2 = half(2);
-    detail = `Cambios en el min ${h1.length ? joinY(h1) : '—'} de la 1ª parte, en el descanso y en el min ${h2.length ? joinY(h2) : '—'} de la 2ª.`;
+    detail = `Cambios en el min ${h1.length ? joinY(h1) : '—'} de la 1ª parte, ${fixed ? 'en el descanso' : 'en el descanso si hace falta'} y en el min ${h2.length ? joinY(h2) : '—'} de la 2ª.`;
   } else if (fixed) {
     const pts = intervalPoints(halfLen, Number(freq)).filter((p) => p.h === 1).map((p) => fmtMin(p.t));
     detail = pts.length ? `Cambios en el min ${joinY(pts)} de cada parte, y en el descanso.` : 'Solo habrá cambios en el descanso.';
     if (adjust && pts.length) detail += ' Alguno puede moverse hasta 3 min para que todos jueguen lo mismo.';
+  } else if (first) {
+    detail = `Primera remesa en el min ${fmtMin(first)}. Después la app decide cuándo cambiar para que todos jueguen lo mismo, sin quitar a nadie que lleve menos de 5 min en el campo.`;
   } else {
     detail = 'La app elige los momentos que dejan los minutos más iguales con el menor número de cambios.';
   }
@@ -598,8 +616,21 @@ function freqControl(scope, freq, halfLen, adjust = true, points = null) {
       <div class="stepper-val">Cada <b>${fmtMin(Number(freq))}</b> min</div>
       <button class="btn" data-action="freq-step" data-scope="${scope}" data-d="1" aria-label="Más minutos">+</button>
     </div>
-    <label class="switch"><input type="checkbox" data-action="freq-adjust" data-scope="${scope}" ${adjust ? 'checked' : ''}> Ajustar algún cambio (±3 min) para igualar minutos</label>` : ''}
+    <label class="switch"><input type="checkbox" data-action="freq-adjust" data-scope="${scope}" ${adjust ? 'checked' : ''}> Ajustar algún cambio (±3 min) para igualar minutos</label>` : `
+    <label class="switch"><input type="checkbox" data-action="freq-first" data-scope="${scope}" ${first ? 'checked' : ''}> Fijar el minuto de la primera remesa</label>
+    ${first ? `<div class="stepper">
+      <button class="btn" data-action="first-step" data-scope="${scope}" data-d="-1" aria-label="Antes">−</button>
+      <div class="stepper-val">1ª remesa en el min <b>${fmtMin(first)}</b></div>
+      <button class="btn" data-action="first-step" data-scope="${scope}" data-d="1" aria-label="Después">+</button>
+    </div>` : ''}`}
     <p class="muted small">${detail}</p>`;
+}
+
+function setFirst(scope, value) {
+  if (scope === 'setup') db.setup.firstChange = value;
+  else { db.live.firstChange = value; recomputeSchedule(db.live); }
+  persist();
+  render();
 }
 
 function setFreq(scope, value) {
@@ -786,7 +817,7 @@ function viewLive() {
   </section>`;
 
   const posWarn = L.phase === 'pre' ? positionWarningTexts(L.formation, availablePlayers(L).map((p) => playerById(p.id))) : [];
-  const freqCard = L.phase === 'pre' ? `<section class="card">${posWarn.map((w) => `<p class="warn">⚠️ ${w}</p>`).join('')}<h3>Cambios</h3>${freqControl('live', L.freq, L.halfLen, L.freqAdjust !== false, L.points)}</section>` : '';
+  const freqCard = L.phase === 'pre' ? `<section class="card">${posWarn.map((w) => `<p class="warn">⚠️ ${w}</p>`).join('')}<h3>Cambios</h3>${freqControl('live', L.freq, L.halfLen, L.freqAdjust !== false, L.points, L.firstChange ?? null)}</section>` : '';
   const showSheet = ui.sel?.kind === 'slot' && L.lineup[ui.sel.id] && ['h1', 'h2', 'break'].includes(L.phase);
   const sheet = showSheet ? viewSubSheet(L) : '';
   return clock + banner + freqCard + (L.phase === 'end' ? '' : pitch + benchHtml) + planHtml + table + footer + sheet;
@@ -957,6 +988,11 @@ const actions = {
     const next = Math.min(20, Math.max(2, Math.round(cur / 60) + Number(d.d))) * 60;
     setFreq(d.scope, next);
   },
+  'first-step': (d) => {
+    const obj = d.scope === 'setup' ? db.setup : db.live;
+    const cur = obj.firstChange === undefined ? 480 : obj.firstChange || 480;
+    setFirst(d.scope, Math.min(20, Math.max(2, Math.round(cur / 60) + Number(d.d))) * 60);
+  },
   'cancel-sel': () => { ui.sel = null; ui.injured = false; render(); },
   'sub-recommended': () => {
     const L = db.live;
@@ -972,6 +1008,7 @@ const actions = {
     if (!ui.next) return;
     const L = db.live; snapshot(L);
     L.handled.push(...ui.next.keys);
+    if (L.freq === 'auto') recomputeSchedule(L);
     persist(); render();
   },
   'toggle-unavailable': (d) => toggleUnavailable(d.id),
@@ -1043,6 +1080,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset.action === 'toggle-injured') { ui.injured = el.checked; return; }
+  if (el.dataset.action === 'freq-first') { setFirst(el.dataset.scope, el.checked ? 480 : null); return; }
   if (el.dataset.action === 'freq-adjust') {
     if (el.dataset.scope === 'setup') db.setup.freqAdjust = el.checked;
     else { db.live.freqAdjust = el.checked; recomputeSchedule(db.live); }
@@ -1118,14 +1156,9 @@ function alarmDue() {
   computePlan();
   return Boolean(ui.next?.due);
 }
-let alarmOn = false;
 function alarmTick() {
   const due = alarmDue();
-  if (due !== alarmOn) {
-    alarmOn = due;
-    document.body.classList.toggle('alarm', due);
-    render();
-  }
+  if (due !== alarmOn) render();
   syncKeepAlive();
   if (due) beep(3);
 }
