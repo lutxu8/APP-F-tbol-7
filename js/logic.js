@@ -425,6 +425,8 @@ export function planMatch({
     if (!Object.values(cur).includes(p.id) && !onlyGK(p)) benchStart[p.id] = nominal(pos) - (phase === 'pre' ? 0 : p.benched ?? 0);
   }
   let benchExcess = 0;
+  let benchMax = { sec: 0, id: null }; // el tramo seguido más largo en el banquillo
+  const noteBench = (id, sec) => { if (sec > benchMax.sec) benchMax = { sec, id }; };
   const maxBenchSec = maxBenchMin ? maxBenchMin * 60 : null;
   const steps = [];
   const hasEmptySlot = slots.some((s) => !cur[s.id]) && players.some((p) => !Object.values(cur).includes(p.id));
@@ -497,6 +499,7 @@ export function planMatch({
       if (sb.in) stintStart[sb.in] = nominal(point);
       if (sb.in && benchStart[sb.in] != null) {
         if (maxBenchSec) benchExcess += Math.max(0, nominal(point) - benchStart[sb.in] - maxBenchSec);
+        noteBench(sb.in, nominal(point) - benchStart[sb.in]);
         delete benchStart[sb.in];
       }
       if (sb.out && !onlyGK(players.find((p) => p.id === sb.out) || {})) benchStart[sb.out] = nominal(point);
@@ -505,8 +508,11 @@ export function planMatch({
     cur = after;
   });
   advance({ h: 2, t: halfLen });
-  if (maxBenchSec) for (const st of Object.values(benchStart)) benchExcess += Math.max(0, 2 * halfLen - st - maxBenchSec);
-  return { changes, projected: played, benchExcessMin: benchExcess / 60 };
+  for (const [id, st] of Object.entries(benchStart)) {
+    if (maxBenchSec) benchExcess += Math.max(0, 2 * halfLen - st - maxBenchSec);
+    noteBench(id, 2 * halfLen - st);
+  }
+  return { changes, projected: played, benchExcessMin: benchExcess / 60, benchMax };
 }
 
 /**

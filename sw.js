@@ -1,5 +1,6 @@
-// Funciona sin conexión: sirve desde caché y actualiza en segundo plano.
-const CACHE = 'futbol7-v15';
+// Con conexión, siempre la última versión de la app (red primero); sin
+// conexión (p. ej. en el campo), la copia guardada.
+const CACHE = 'futbol7-v16';
 const ASSETS = [
   './',
   './index.html',
@@ -28,14 +29,15 @@ self.addEventListener('fetch', (e) => {
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   e.respondWith(
     caches.open(CACHE).then(async (cache) => {
-      const cached = await cache.match(req, { ignoreSearch: true });
-      const network = fetch(req)
-        .then((res) => {
-          if (res.ok) cache.put(req, res.clone());
-          return res;
-        })
-        .catch(() => cached);
-      return cached || network;
+      try {
+        const res = await fetch(req, { cache: 'reload' });
+        if (res.ok) cache.put(req, res.clone());
+        return res;
+      } catch (err) {
+        const cached = await cache.match(req, { ignoreSearch: true });
+        if (cached) return cached;
+        throw err;
+      }
     }),
   );
 });

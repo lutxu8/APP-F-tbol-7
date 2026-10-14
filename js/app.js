@@ -3,6 +3,7 @@ import {
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
+export const APP_VERSION = 16;
 let db = load();
 const ui = { tab: 'match', sel: null, injured: false, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
 
@@ -840,6 +841,7 @@ function viewLive() {
   const planHtml = L.phase === 'end' ? '' : `<section class="card">
     <details ${L.phase === 'pre' ? 'open' : ''}><summary><b>Plan de cambios</b> <span class="muted small">(${upcoming.length} momentos)</span></summary>
     ${upcoming.length ? upcoming.map((c) => `<div class="plan-item"><div class="plan-when">${whenText(L, c)}</div>${changeText(L, c)}</div>`).join('') : '<p class="muted">Sin cambios previstos.</p>'}
+    ${benchSummary(L, plan)}
     <p class="muted small">El plan se recalcula solo si haces cambios distintos, pausas o alguien se lesiona.</p>
     </details>
   </section>`;
@@ -873,6 +875,18 @@ function viewLive() {
   const showSheet = ui.sel?.kind === 'slot' && L.lineup[ui.sel.id] && ['h1', 'h2', 'break'].includes(L.phase);
   const sheet = showSheet ? viewSubSheet(L) : '';
   return clock + banner + freqCard + (L.phase === 'end' ? '' : pitch + benchHtml) + planHtml + table + footer + sheet;
+}
+
+/** Resumen del tramo más largo seguido en el banquillo según el plan. */
+function benchSummary(L, plan) {
+  const bm = plan.benchMax;
+  if (!bm || !bm.id) return '';
+  const limit = Number(db.settings.maxBench) || 0;
+  const mins = fmtMin(Math.round(bm.sec));
+  if (limit && bm.sec > limit * 60 + 30) {
+    return `<p class="warn">⚠️ Según el plan, ${esc(nameOf(bm.id))} estará ${mins} min seguidos en el banquillo (máximo ${limit}). Suele pasar con muchos convocados, si la primera remesa es tarde o si hay pocos jugadores para alguna posición.</p>`;
+  }
+  return `<p class="muted small">🪑 Máximo seguido en el banquillo según el plan: <b>${mins} min</b> (${esc(nameOf(bm.id))})${limit ? ` · límite ${limit} min` : ''}.</p>`;
 }
 
 function clockText(L) {
@@ -957,6 +971,7 @@ function viewSettings() {
   </section>
   <section class="card">
     <button class="btn danger-outline block" data-action="wipe">Borrar todos los datos</button>
+    <p class="muted small center">Versión ${APP_VERSION}</p>
   </section>`;
 }
 

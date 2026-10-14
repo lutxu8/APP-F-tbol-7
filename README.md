@@ -39,7 +39,7 @@ No necesita servidor ni cuentas: los datos se guardan en el propio teléfono y f
 2. Abre esa dirección en **Safari** desde el iPhone.
 3. Pulsa **Compartir → Añadir a pantalla de inicio**.
 
-Se abre a pantalla completa como una app normal y funciona sin cobertura en el campo.
+Se abre a pantalla completa como una app normal y funciona sin cobertura en el campo. Con conexión carga siempre la última versión; el número de versión aparece al final de *Ajustes*.
 
 > Los datos se guardan solo en el teléfono donde se usa la app. De vez en cuando, haz *Ajustes → Exportar* para tener una copia.
 > Deja la app abierta durante el partido (la pantalla no se apaga sola mientras está abierta). Si bloqueas el iPhone o cambias a otra app, iOS detiene la página y la alarma no puede sonar hasta que vuelvas. El iPhone solo deja sonar una página después de tocar la pantalla: si abres la app con el partido en marcha, sale un aviso amarillo para activar el sonido. Con **🔊 Probar sonido** puedes comprobarlo antes de empezar. Sube el volumen del iPhone (el de contenido, no el del timbre).
