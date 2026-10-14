@@ -6,9 +6,9 @@ No necesita servidor ni cuentas: los datos se guardan en el propio teléfono y f
 
 ## Qué hace
 
-- **Plantilla**: jugadores con dorsal y posiciones posibles (POR, DEF, MED, DEL).
+- **Plantilla**: jugadores con dorsal y posiciones en las que pueden jugar: portero (POR), lateral izquierdo (LI), defensa central (DFC), lateral derecho (LD), centrocampista (MED) y delantero (DEL).
 - **Convocatoria**: marcas quién puede ir. Si hay más disponibles que plazas (12 por defecto, configurable), entran primero los que **menos minutos** llevan en la temporada (y, a igualdad, los que menos partidos han jugado). Siempre intenta que haya un portero. Se puede ajustar a mano.
-- **Sistema**: 1-3-2-1 o 1-2-3-1.
+- **Sistema**: 1-3-2-1 (POR · LI, DFC, LD · 2 MED · DEL) o 1-2-3-1 (POR · 2 DFC · 3 MED · DEL). En el 1-2-3-1, el central izquierdo también lo puede cubrir un LI, y el derecho un LD.
 - **Once inicial y plan de cambios**: la app propone el once y un plan para todo el partido, con los **minutos previstos** de cada jugador al final.
 - **Durante el partido**:
   - Reloj por partes (2 × 25 min), con pausa y tiempo añadido.
@@ -22,7 +22,7 @@ No necesita servidor ni cuentas: los datos se guardan en el propio teléfono y f
 
 ### Cómo decide los cambios
 
-- En cada cambio busca la mejor combinación de jugadores y puestos (algoritmo húngaro): entran los que menos minutos llevan, cada uno en una posición que sabe jugar (fuera de posición solo si no queda otra), y procura no mover a quien ya está jugando.
+- En cada cambio busca la mejor combinación de jugadores y puestos (algoritmo húngaro): entran los que menos minutos llevan, cada uno en una posición que sabe jugar (si no hay nadie, primero alguien de la misma línea, p. ej. un LD de lateral izquierdo, y solo como último recurso alguien de otra línea), y procura no mover a quien ya está jugando.
 - En modo **Automático** prueba varios calendarios de cambios y elige el que deja los minutos más iguales con el menor número de cambios. Con un portero fijo, los jugadores de campo acaban con los mismos minutos o casi.
 - Opción *“El portero solo cambia en el descanso”* (activada por defecto). Si hay dos porteros, se reparten las partes, y el que vaya a ser portero en la 2ª parte descansa más en la 1ª.
 - También se puede elegir una frecuencia fija (cada 5, 6¼, 8⅓ o 12½ min).

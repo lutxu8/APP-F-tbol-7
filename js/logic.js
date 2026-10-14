@@ -1,20 +1,25 @@
 // Lógica pura (sin DOM): sistemas, asignación de posiciones, plan de cambios
 // y propuesta de convocatoria. Se puede probar con Node (ver tests/).
 
-export const ROLES = ['POR', 'DEF', 'MED', 'DEL'];
-export const ROLE_NAMES = { POR: 'Portero', DEF: 'Defensa', MED: 'Centrocampista', DEL: 'Delantero' };
+export const ROLES = ['POR', 'LI', 'DFC', 'LD', 'MED', 'DEL'];
+export const ROLE_NAMES = {
+  POR: 'Portero', LI: 'Lateral izquierdo', DFC: 'Defensa central', LD: 'Lateral derecho', MED: 'Centrocampista', DEL: 'Delantero',
+};
+// Línea a la que pertenece cada posición (para colores y para "fuera de posición, pero en su línea").
+export const ROLE_LINE = { POR: 'POR', LI: 'DEF', DFC: 'DEF', LD: 'DEF', MED: 'MED', DEL: 'DEL' };
 
 // Coordenadas en % del campo (y=0 portería rival, y=100 portería propia).
+// `role` es la posición del puesto; `accepts` las posiciones que encajan en él.
 export const FORMATIONS = {
   '3-2-1': {
     name: '1-3-2-1',
     slots: [
       { id: 'POR', role: 'POR', label: 'POR', x: 50, y: 88 },
-      { id: 'DEF1', role: 'DEF', label: 'DFI', x: 18, y: 66 },
-      { id: 'DEF2', role: 'DEF', label: 'DFC', x: 50, y: 70 },
-      { id: 'DEF3', role: 'DEF', label: 'DFD', x: 82, y: 66 },
-      { id: 'MED1', role: 'MED', label: 'MCI', x: 30, y: 42 },
-      { id: 'MED2', role: 'MED', label: 'MCD', x: 70, y: 42 },
+      { id: 'DEF1', role: 'LI', label: 'LI', x: 16, y: 64 },
+      { id: 'DEF2', role: 'DFC', label: 'DFC', x: 50, y: 70 },
+      { id: 'DEF3', role: 'LD', label: 'LD', x: 84, y: 64 },
+      { id: 'MED1', role: 'MED', label: 'MC', x: 30, y: 42 },
+      { id: 'MED2', role: 'MED', label: 'MC', x: 70, y: 42 },
       { id: 'DEL1', role: 'DEL', label: 'DC', x: 50, y: 16 },
     ],
   },
@@ -22,8 +27,8 @@ export const FORMATIONS = {
     name: '1-2-3-1',
     slots: [
       { id: 'POR', role: 'POR', label: 'POR', x: 50, y: 88 },
-      { id: 'DEF1', role: 'DEF', label: 'DFI', x: 30, y: 68 },
-      { id: 'DEF2', role: 'DEF', label: 'DFD', x: 70, y: 68 },
+      { id: 'DEF1', role: 'DFC', accepts: ['DFC', 'LI'], label: 'DFC', x: 30, y: 68 },
+      { id: 'DEF2', role: 'DFC', accepts: ['DFC', 'LD'], label: 'DFC', x: 70, y: 68 },
       { id: 'MED1', role: 'MED', label: 'MI', x: 15, y: 42 },
       { id: 'MED2', role: 'MED', label: 'MC', x: 50, y: 45 },
       { id: 'MED3', role: 'MED', label: 'MD', x: 85, y: 42 },
@@ -31,6 +36,26 @@ export const FORMATIONS = {
     ],
   },
 };
+
+/** ¿Puede jugar en este puesto? 'yes' | 'line' (misma línea, otra posición) | 'no'. */
+export function fitFor(positions, slot) {
+  const pos = positions || [];
+  const accepts = slot.accepts || [slot.role];
+  if (accepts.some((r) => pos.includes(r))) return 'yes';
+  const line = ROLE_LINE[slot.role];
+  if (line !== 'POR' && pos.some((r) => ROLE_LINE[r] === line)) return 'line';
+  return 'no';
+}
+
+/** Convierte posiciones antiguas (DEF genérico) a las nuevas. */
+export function migratePositions(positions) {
+  const out = [];
+  for (const r of positions || []) {
+    if (r === 'DEF') out.push('LI', 'DFC', 'LD');
+    else if (ROLES.includes(r)) out.push(r);
+  }
+  return [...new Set(out)];
+}
 
 const BIG = 1e7;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -83,7 +108,7 @@ export function hungarian(cost) {
  * - Respeta posiciones; fuera de posición solo si no hay otra opción.
  * - `lockGK`: el portero actual no se mueve.
  *
- * players: [{ id, positions: ['DEF', ...], played: segundos, tie?: número }]
+ * players: [{ id, positions: ['DFC', ...], played: segundos, tie?: número }]
  * current: { slotId: playerId | null }
  * Devuelve { slotId: playerId | null }.
  */
@@ -127,7 +152,9 @@ export function optimizeLineup({
         v -= 2 * g * hysteresisMin;
         if (cs !== slot.id) v += 2 * g * (slot.role === 'POR' || roleOfSlot[cs] === 'POR' ? 3 : movePenaltyMin);
       }
-      if (!(r.positions || []).includes(slot.role)) v += slot.role === 'POR' ? 3 * OUT : OUT;
+      const fit = fitFor(r.positions, slot);
+      if (fit === 'line') v += OUT / 10;
+      else if (fit === 'no') v += slot.role === 'POR' ? 3 * OUT : OUT;
       row[c] = v;
     }
     return row;

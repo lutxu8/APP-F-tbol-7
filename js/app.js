@@ -1,5 +1,5 @@
 import {
-  ROLES, ROLE_NAMES, FORMATIONS, optimizeLineup, planMatch, chooseSchedule, intervalPoints, pointKey, proposeSquad, seasonStats, diffLineups,
+  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, chooseSchedule, intervalPoints, pointKey, proposeSquad, seasonStats, diffLineups,
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
@@ -36,7 +36,7 @@ function seasonOf() {
   return seasonStats(db.players, db.matches);
 }
 function posChips(positions) {
-  return ROLES.filter((r) => (positions || []).includes(r)).map((r) => `<span class="chip chip-${r}">${r}</span>`).join('');
+  return ROLES.filter((r) => (positions || []).includes(r)).map((r) => `<span class="chip chip-${ROLE_LINE[r]}" title="${ROLE_NAMES[r]}">${r}</span>`).join('');
 }
 
 // ---------- sonido, vibración y pantalla encendida ----------
@@ -548,10 +548,10 @@ function viewLive() {
         const pid = L.lineup[s.id];
         const sel = ui.sel?.kind === 'slot' && ui.sel.id === s.id;
         const p = pid && playerById(pid);
-        const outOfPos = p && !(p.positions || []).includes(s.role);
+        const fit = p ? fitFor(p.positions, s) : 'yes';
         return `<button class="slot ${sel ? 'sel' : ''} ${pid && outNext.has(pid) ? 'going-out' : ''} ${pid ? '' : 'empty'}" style="left:${s.x}%;top:${s.y}%" data-action="tap" data-kind="slot" data-id="${s.id}">
-          <span class="shirt ${s.role}">${p ? esc(p.number || '·') : '+'}</span>
-          <span class="pname">${p ? esc(p.name) : s.label}${outOfPos ? ' ⚠️' : ''}</span>
+          <span class="shirt ${ROLE_LINE[s.role]}">${p ? esc(p.number || '·') : '+'}</span>
+          <span class="pname">${p ? esc(p.name) : s.label}${fit === 'no' ? ' ⚠️' : fit === 'line' ? ' ⚠︎' : ''}</span>
           ${p ? `<span class="ptime" data-played="${pid}">${mmss(playedNow(L, pid))}</span>` : `<span class="ptime">${s.label}</span>`}
         </button>`;
       }).join('')}
@@ -643,7 +643,7 @@ function viewSquad() {
   return `<section class="card">
     <div class="toolbar"><h2 class="grow">Plantilla (${db.players.length})</h2><button class="btn primary" data-action="new-player">+ Jugador</button></div>
     <div class="list">${list || '<p class="muted">Todavía no hay jugadores.</p>'}</div>
-    <p class="muted small">POR = portero · DEF = defensa · MED = centrocampista · DEL = delantero. Marca todas las posiciones en las que puede jugar cada uno.</p>
+    <p class="muted small">POR = portero · LI = lateral izquierdo · DFC = defensa central · LD = lateral derecho · MED = centrocampista · DEL = delantero. Marca todas las posiciones en las que puede jugar cada uno.</p>
   </section>`;
 }
 
@@ -706,7 +706,7 @@ function renderModal() {
         <label>Nombre<input type="text" data-bind="modal.player.name" value="${esc(p.name)}" placeholder="Nombre"></label>
       </div>
       <p class="label">Posiciones en las que puede jugar</p>
-      <div class="pos-picker">${ROLES.map((r) => `<button class="pos ${p.positions.includes(r) ? 'on' : ''} chip-${r}" data-action="toggle-pos" data-role="${r}">${r}<small>${ROLE_NAMES[r]}</small></button>`).join('')}</div>
+      <div class="pos-picker">${ROLES.map((r) => `<button class="pos ${p.positions.includes(r) ? 'on' : ''} chip-${ROLE_LINE[r]}" data-action="toggle-pos" data-role="${r}">${r}<small>${ROLE_NAMES[r]}</small></button>`).join('')}</div>
       <label class="switch"><input type="checkbox" data-bind="modal.player.active" ${p.active !== false ? 'checked' : ''}> Disponible por defecto (en plantilla activa)</label>
       <div class="toolbar">
         ${m.isNew ? '' : '<button class="btn danger-outline" data-action="delete-player">Eliminar</button>'}

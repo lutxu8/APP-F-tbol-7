@@ -1,4 +1,5 @@
 // Persistencia en el propio dispositivo (localStorage).
+import { migratePositions } from './logic.js';
 
 const KEY = 'futbol7-rotaciones.v1';
 
@@ -13,6 +14,7 @@ export function load() {
     const raw = localStorage.getItem(KEY);
     if (!raw) return fresh();
     const db = JSON.parse(raw);
+    for (const p of db.players || []) p.positions = migratePositions(p.positions);
     return { ...fresh(), ...db, settings: { ...DEFAULT_SETTINGS, ...(db.settings || {}) } };
   } catch (e) {
     console.error(e);
@@ -37,6 +39,7 @@ export function exportJSON(db) {
 export function importJSON(db, text) {
   const data = JSON.parse(text);
   if (!Array.isArray(data.players) || !Array.isArray(data.matches)) throw new Error('El archivo no es una copia de seguridad válida.');
+  for (const p of data.players) p.positions = migratePositions(p.positions);
   return { ...db, players: data.players, matches: data.matches, settings: { ...DEFAULT_SETTINGS, ...(data.settings || {}) }, setup: null, live: null };
 }
 

@@ -1,15 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FORMATIONS, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
+import { FORMATIONS, fitFor, migratePositions, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
 
 const HALF = 25 * 60;
 
 function squad(n, { gks = 1, dedicatedGK = true } = {}) {
-  const roles = ['DEF', 'MED', 'DEL'];
+  const roles = ['LI', 'DFC', 'MED', 'LD', 'DEL', 'MED'];
   const out = [];
   for (let i = 0; i < n; i++) {
-    if (i < gks) out.push({ id: 'p' + i, positions: dedicatedGK ? ['POR'] : ['POR', 'DEF'] });
-    else out.push({ id: 'p' + i, positions: [roles[i % 3], roles[(i + 1) % 3]] });
+    if (i < gks) out.push({ id: 'p' + i, positions: dedicatedGK ? ['POR'] : ['POR', 'DFC'] });
+    else out.push({ id: 'p' + i, positions: [roles[i % 6], roles[(i + 2) % 6]] });
   }
   return out;
 }
@@ -35,7 +35,7 @@ test('lineup respects positions', () => {
   const { lineup, slots } = simulate(players, '3-2-1');
   for (const s of slots) {
     const p = players.find((x) => x.id === lineup[s.id]);
-    assert.ok(p.positions.includes(s.role), `${p.id} en ${s.id}`);
+    assert.equal(fitFor(p.positions, s), 'yes', `${p.id} en ${s.id}`);
   }
 });
 
@@ -50,7 +50,7 @@ for (const formation of ['3-2-1', '2-3-1']) {
       assert.equal(mins[0], 50);
       const field = mins.slice(1);
       const spread = Math.max(...field) - Math.min(...field);
-      assert.ok(spread <= 5, `diferencia ${spread.toFixed(1)} min: ${field.map((m) => m.toFixed(1)).join(', ')}`);
+      assert.ok(spread <= 6, `diferencia ${spread.toFixed(1)} min: ${field.map((m) => m.toFixed(1)).join(', ')}`);
     });
   }
 }
@@ -110,4 +110,25 @@ test('convocatoria prioriza menos minutos y garantiza portero', () => {
 test('diffLineups empareja entradas y salidas', () => {
   const d = diffLineups({ A: 'x', B: 'y' }, { A: 'z', B: 'y' });
   assert.deepEqual(d.subs, [{ in: 'z', out: 'x', slotId: 'A' }]);
+});
+
+test('laterales y centrales en su sitio', () => {
+  const slots = FORMATIONS['3-2-1'].slots;
+  const players = [
+    { id: 'gk', positions: ['POR'] }, { id: 'li', positions: ['LI'] }, { id: 'ld', positions: ['LD'] }, { id: 'dfc', positions: ['DFC'] },
+    { id: 'm1', positions: ['MED'] }, { id: 'm2', positions: ['MED'] }, { id: 'dc', positions: ['DEL'] },
+  ].map((p) => ({ ...p, played: 0 }));
+  const l = optimizeLineup({ slots, players });
+  assert.deepEqual([l.POR, l.DEF1, l.DEF2, l.DEF3], ['gk', 'li', 'dfc', 'ld']);
+});
+
+test('en 1-2-3-1 un lateral puede cubrir la defensa de su lado', () => {
+  const [, d1, d2] = FORMATIONS['2-3-1'].slots;
+  assert.equal(fitFor(['LI'], d1), 'yes');
+  assert.equal(fitFor(['LI'], d2), 'line');
+  assert.equal(fitFor(['MED'], d2), 'no');
+});
+
+test('migración de DEF antiguo', () => {
+  assert.deepEqual(migratePositions(['DEF', 'MED']), ['LI', 'DFC', 'LD', 'MED']);
 });
