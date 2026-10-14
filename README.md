@@ -44,7 +44,7 @@ Es HTML, CSS y JavaScript sin dependencias ni compilación.
 
 ```bash
 npx http-server .          # o cualquier servidor estático
-node --test tests/*.test.mjs# pruebas de la lógica de rotaciones
+node --test tests/*.test.mjs   # pruebas de la lógica de rotaciones
 ```
 
 - `js/logic.js`: lógica pura (sistemas, asignación de puestos, plan de cambios, convocatoria).
