@@ -116,7 +116,7 @@ export function hungarian(cost) {
  */
 export function optimizeLineup({
   slots, players, current = {}, lockGK = false, gapMin = 6, gkCommitMin = null, hysteresisMin = 2, movePenaltyMin = 0.5,
-  minStintMin = 5, stintPenaltyMin = 6, linePenaltyMin = 1, offPenaltyMin = 2.5,
+  minStintMin = 5, stintPenaltyMin = 15, linePenaltyMin = 1, offPenaltyMin = 2.5,
 }) {
   const slotOf = {};
   const ids = new Set(players.map((p) => p.id));
@@ -240,7 +240,7 @@ function scorePlan(plan) {
   const subs = plan.changes.reduce((a, c) => a + c.subs.length, 0);
   const events = plan.changes.filter((c) => c.subs.length).length;
   const short = plan.changes.reduce((a, c) => a + (c.shortOuts || 0), 0);
-  return variance + 0.5 * short + 0.03 * subs + 0.25 * events;
+  return variance + 2 * short + 0.03 * subs + 0.25 * events;
 }
 
 /**
@@ -297,6 +297,7 @@ export function chooseSchedule(base, { minWindows = 3, maxWindows = 12, firstSec
   const handledBase = new Set(base.handled || []);
   // Primer cambio fijado por el usuario y aún no ha llegado: se respeta y el resto se reparte después.
   const first = firstSec && firstSec > nowNominal ? nominalToPoint(firstSec, halfLen) : null;
+  if (first) base = { ...base, mustChange: [...(base.mustChange || []), pointKey(first)] };
   const start = first ? firstSec : nowNominal;
   const range = firstSec ? [1, 10] : [minWindows, maxWindows];
   const GAP = 180; // mínimo entre remesas
@@ -376,7 +377,7 @@ export function diffLineups(before, after) {
  */
 export function planMatch({
   slots, players, lineup, phase, halfSec = 0, halfLen, points: basePoints = [], handled = new Set(), gkHalftimeOnly = true, firstStep = null,
-  stepVariants = {}, forced = {},
+  stepVariants = {}, forced = {}, mustChange = [],
 }) {
   handled = handled instanceof Set ? handled : new Set(handled);
   const played = Object.fromEntries(players.map((p) => [p.id, p.played || 0]));
@@ -463,6 +464,18 @@ export function planMatch({
       ...((i === 0 && firstStep ? firstStep : stepVariants[i])?.opts || {}),
       ...((i === 0 && firstStep ? firstStep : stepVariants[i])?.gapMul ? { gapMin: gapMin * (i === 0 && firstStep ? firstStep : stepVariants[i]).gapMul } : {}),
     });
+    // La primera remesa que fija el usuario tiene que tener cambios sí o sí.
+    if (!forcedLineup && [point.key, ...st.keys].some((k) => mustChange.includes(k))
+      && !Object.values(after).some((pid) => pid && !Object.values(cur).includes(pid))) {
+      const again = optimizeLineup({
+        slots,
+        players: players.map((p, j) => ({
+          id: p.id, positions: p.positions, played: played[p.id], stint: null, tie: j,
+        })),
+        current: cur, lockGK, gapMin, gkCommitMin, hysteresisMin: 0, stintPenaltyMin: 0,
+      });
+      Object.assign(after, again);
+    }
     const { subs, moves } = diffLineups(cur, after);
     let shortOuts = 0;
     for (const sb of subs) {

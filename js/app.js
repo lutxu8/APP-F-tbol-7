@@ -197,6 +197,8 @@ function planBase(L) {
     halfLen: L.halfLen,
     handled: new Set(L.handled),
     gkHalftimeOnly: L.gkHalftimeOnly,
+    // La primera remesa fijada por el usuario siempre tiene cambios.
+    mustChange: L.freq === 'auto' && L.firstChange && L.firstChange < L.halfLen ? [pointKey({ h: 1, t: L.firstChange })] : [],
   };
 }
 function recomputeSchedule(L) {

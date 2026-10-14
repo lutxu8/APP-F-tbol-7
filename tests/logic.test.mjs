@@ -20,7 +20,7 @@ function simulate(players, formation, opts = {}) {
   const lineup = optimizeLineup({ slots, players: ps, gkCommitMin: 25 });
   const base = { slots, players: ps, lineup, phase: 'pre', halfLen: HALF, gkHalftimeOnly: opts.gkHalftimeOnly ?? true };
   const points = opts.interval ? intervalPoints(HALF, opts.interval) : chooseSchedule(base).points;
-  const { changes, projected } = planMatch({ ...base, points });
+  const { changes, projected } = planMatchRefined({ ...base, points });
   return { changes, projected, lineup, slots };
 }
 
@@ -228,4 +228,19 @@ test('plantillas variadas de 10 de campo: plan afinado con diferencia pequeña',
     assert.equal(plan.projected.gk, 50 * 60, 'el portero puro no sale de la portería');
   }
   assert.ok(Math.max(...spreads) <= 2.5, spreads.join(', '));
+});
+
+test('la primera remesa fijada siempre tiene cambios, sea cual sea el minuto', () => {
+  const slots = FORMATIONS['3-2-1'].slots;
+  const roster = [['POR'], ['LI', 'DFC'], ['DFC', 'MED'], ['LD', 'MED'], ['MED', 'DEL'], ['MED'], ['DEL', 'MED'], ['LI', 'LD', 'DFC'], ['DFC', 'MED'], ['MED', 'DEL'], ['LD', 'MED'], ['MED', 'DEL']];
+  for (const n of [9, 10, 11, 12]) {
+    for (let m = 2; m <= 20; m++) {
+      const players = roster.slice(0, n).map((pos, i) => ({ id: 'p' + i, positions: pos, played: 0 }));
+      const lineup = optimizeLineup({ slots, players, gkCommitMin: 25 });
+      const base = { slots, players, lineup, phase: 'pre', halfLen: HALF, gkHalftimeOnly: true, mustChange: [`1-${m * 60}`] };
+      const plan = planMatchRefined({ ...base, points: chooseSchedule(base, { firstSec: m * 60 }).points });
+      const first = plan.changes.find((c) => c.subs.length);
+      assert.equal(first.half === 1 && first.t, m * 60, `n=${n}, min ${m}: primer cambio en ${first.half}ª ${first.t / 60}`);
+    }
+  }
 });
