@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FORMATIONS, fitFor, migratePositions, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
+import { FORMATIONS, fitFor, migratePositions, recommendReplacement, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
 
 const HALF = 25 * 60;
 
@@ -131,4 +131,20 @@ test('en 1-2-3-1 un lateral puede cubrir la defensa de su lado', () => {
 
 test('migración de DEF antiguo', () => {
   assert.deepEqual(migratePositions(['DEF', 'MED']), ['LI', 'DFC', 'LD', 'MED']);
+});
+
+test('cambio no previsto: recomienda al del banquillo que encaja y menos ha jugado', () => {
+  const slots = FORMATIONS['3-2-1'].slots;
+  const players = [
+    { id: 'gk', positions: ['POR'], played: 600 }, { id: 'li', positions: ['LI'], played: 600 }, { id: 'ld', positions: ['LD'], played: 600 },
+    { id: 'dfc', positions: ['DFC'], played: 600 }, { id: 'm1', positions: ['MED'], played: 600 }, { id: 'm2', positions: ['MED'], played: 600 },
+    { id: 'dc', positions: ['DEL'], played: 600 },
+    { id: 'b1', positions: ['MED'], played: 0 }, { id: 'b2', positions: ['LD', 'LI'], played: 300 }, { id: 'b3', positions: ['LD'], played: 100 },
+  ];
+  const lineup = { POR: 'gk', DEF1: 'li', DEF2: 'dfc', DEF3: 'ld', MED1: 'm1', MED2: 'm2', DEL1: 'dc' };
+  const r = recommendReplacement({ slots, players, lineup, outId: 'ld', lockGK: true });
+  assert.equal(r.after.DEF3, 'b3');
+  assert.deepEqual(r.subs, [{ in: 'b3', out: 'ld', slotId: 'DEF3' }]);
+  assert.deepEqual(r.options.map((o) => o.id), ['b3', 'b2', 'b1']);
+  assert.equal(r.after.POR, 'gk');
 });

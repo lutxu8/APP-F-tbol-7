@@ -218,3 +218,23 @@ details summary { cursor: pointer; padding: 2px 0; }
 @media (min-width: 640px) {
   .pitch { aspect-ratio: 4 / 3.6; }
 }
+
+/* Selector de frecuencia */
+.stepper { display: grid; grid-template-columns: 56px 1fr 56px; gap: 8px; align-items: center; margin-top: 8px; }
+.stepper .btn { font-size: 1.4rem; padding: 6px; }
+.stepper-val { text-align: center; font-size: 1.05rem; }
+.stepper-val b { font-size: 1.5rem; color: var(--accent); }
+
+/* Hoja de cambio no previsto */
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: calc(60px + var(--safe-b)); z-index: 20;
+  max-width: 720px; margin: 0 auto; max-height: 60vh; overflow: auto;
+  background: var(--card); border: 2px solid var(--accent); border-radius: 18px 18px 0 0;
+  padding: 12px 14px 14px; box-shadow: 0 -8px 24px rgba(0, 0, 0, .5);
+}
+.sheet-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sheet-head .mini { margin-left: auto; }
+.sheet .switch { margin: 8px 0; }
+.rec { background: var(--card-2); border-radius: 10px; padding: 8px 10px; }
+.opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.opt { appearance: none; border: 1px solid var(--line); background: var(--card-2); color: var(--text); border-radius: 10px; padding: 8px 10px; font-size: .95rem; font-weight: 600; }

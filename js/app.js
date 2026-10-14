@@ -1,10 +1,10 @@
 import {
-  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, chooseSchedule, intervalPoints, pointKey, proposeSquad, seasonStats, diffLineups,
+  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, seasonStats, diffLineups,
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
 let db = load();
-const ui = { tab: db.live ? 'match' : 'match', sel: null, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
+const ui = { tab: 'match', sel: null, injured: false, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
 
 const $app = document.getElementById('app');
 const $modal = document.getElementById('modal-root');
@@ -292,9 +292,10 @@ function substitute(L, outId, inId, slotId, c) {
 }
 
 /** Aplica una alineación nueva (cambios sugeridos). */
-function applyLineup(after, keys) {
+function applyLineup(after, keys, { injuredId = null, manual = false } = {}) {
   const L = db.live;
   snapshot(L);
+  if (injuredId && !L.unavailable.includes(injuredId)) L.unavailable.push(injuredId);
   const c = clockNow(L);
   const before = { ...L.lineup };
   const { subs, moves } = diffLineups(before, after);
@@ -311,9 +312,12 @@ function applyLineup(after, keys) {
   L.lineup = { ...after };
   L.handled.push(...keys);
   const half = L.phase === 'h2' || L.phase === 'break' ? 2 : 1;
-  for (const s of subs) L.log.push({ half, t: Math.round(halfSecNow(L)), in: s.in, out: s.out, slot: s.slotId });
+  for (const s of subs) L.log.push({ half, t: Math.round(halfSecNow(L)), in: s.in, out: s.out, slot: s.slotId, ...(manual ? { manual } : {}), ...(s.out === injuredId ? { injured: true } : {}) });
   for (const m of moves) L.log.push({ half, t: Math.round(halfSecNow(L)), move: m.pid, from: m.from, to: m.to });
+  // Con alguien menos o un cambio fuera de plan, se reorganiza el resto del partido.
+  if (injuredId || manual) recomputeSchedule(L);
   ui.sel = null;
+  ui.injured = false;
   persist();
   render();
 }
@@ -325,6 +329,13 @@ function tapPlayer(kind, id) {
   if (!sel) { ui.sel = { kind, id }; render(); return; }
   if (sel.kind === kind && sel.id === id) { ui.sel = null; render(); return; }
   if (sel.kind === 'bench' && kind === 'bench') { ui.sel = { kind, id }; render(); return; }
+  if (L.phase !== 'pre' && sel.kind !== kind) {
+    const slotId = sel.kind === 'slot' ? sel.id : id;
+    const benchId = sel.kind === 'bench' ? sel.id : id;
+    const outId = L.lineup[slotId];
+    applyLineup({ ...L.lineup, [slotId]: benchId }, [], { injuredId: ui.injured ? outId : null, manual: true });
+    return;
+  }
   snapshot(L);
   const c = clockNow(L);
   const half = L.phase === 'h2' || L.phase === 'break' ? 2 : 1;
@@ -446,8 +457,6 @@ function viewSetup() {
   if (S.squad.length < 7) warnings.push(`Solo hay ${S.squad.length} convocados: hacen falta 7.`);
   if (!squadPlayers.some((p) => (p.positions || []).includes('POR'))) warnings.push('No hay ningún portero en la convocatoria.');
   const formOpts = Object.entries(FORMATIONS).map(([k, f]) => `<button class="seg ${S.formation === k ? 'on' : ''}" data-action="set-formation" data-f="${k}">${f.name}</button>`).join('');
-  const freqOpts = [['auto', 'Automática (minutos más iguales)'], ['300', 'Cada 5 min'], ['375', 'Cada 6¼ min (4 tramos por parte)'], ['500', 'Cada 8⅓ min (3 tramos por parte)'], ['750', 'Cada 12½ min (2 tramos por parte)']]
-    .map(([v, l]) => `<option value="${v}" ${String(S.freq) === v ? 'selected' : ''}>${l}</option>`).join('');
   return `<section class="card">
     <h2>Nuevo partido · 2/2</h2>
     ${excess ? `<p class="note">Hay <b>${avail.length}</b> disponibles y caben <b>${max}</b>. Entran primero los que <b>menos minutos</b> llevan en la temporada (puedes ajustarlo a mano).</p>` : '<p class="muted">Convocatoria</p>'}
@@ -457,13 +466,78 @@ function viewSetup() {
     <h3>Sistema</h3>
     <div class="segmented">${formOpts}</div>
     <h3>Cambios</h3>
-    <label>Frecuencia<select data-bind="setup.freq">${freqOpts}</select></label>
+    ${freqControl('setup', S.freq, Math.round((db.settings.halfMinutes || 25) * 60))}
     <label class="switch"><input type="checkbox" data-bind="setup.gkHalftimeOnly" ${S.gkHalftimeOnly ? 'checked' : ''}> El portero solo cambia en el descanso</label>
     <div class="toolbar">
       <button class="btn" data-action="setup-back">← Atrás</button>
       <button class="btn primary grow" data-action="setup-create" ${S.squad.length ? '' : 'disabled'}>Ver alineación →</button>
     </div>
   </section>`;
+}
+
+const fmtMin = (sec) => String(Math.round((sec / 60) * 100) / 100).replace('.', ',');
+
+/** Selector de cada cuántos minutos se hacen los cambios. */
+function freqControl(scope, freq, halfLen) {
+  const fixed = freq !== 'auto';
+  let detail;
+  if (fixed) {
+    const pts = intervalPoints(halfLen, Number(freq)).filter((p) => p.h === 1).map((p) => fmtMin(p.t));
+    detail = pts.length
+      ? `Cambios en el min ${pts.length > 1 ? pts.slice(0, -1).join(', ') + ' y ' + pts[pts.length - 1] : pts[0]} de cada parte, y en el descanso.`
+      : 'Solo habrá cambios en el descanso.';
+  } else {
+    detail = 'La app elige los momentos que dejan los minutos más iguales con el menor número de cambios.';
+  }
+  return `<div class="segmented">
+      <button class="seg ${fixed ? '' : 'on'}" data-action="freq-mode" data-scope="${scope}" data-mode="auto">Automático</button>
+      <button class="seg ${fixed ? 'on' : ''}" data-action="freq-mode" data-scope="${scope}" data-mode="fixed">Cada X minutos</button>
+    </div>
+    ${fixed ? `<div class="stepper">
+      <button class="btn" data-action="freq-step" data-scope="${scope}" data-d="-1" aria-label="Menos minutos">−</button>
+      <div class="stepper-val">Cada <b>${fmtMin(Number(freq))}</b> min</div>
+      <button class="btn" data-action="freq-step" data-scope="${scope}" data-d="1" aria-label="Más minutos">+</button>
+    </div>` : ''}
+    <p class="muted small">${detail}</p>`;
+}
+
+function setFreq(scope, value) {
+  if (scope === 'setup') {
+    db.setup.freq = value;
+  } else {
+    db.live.freq = value;
+    recomputeSchedule(db.live);
+  }
+  persist();
+  render();
+}
+
+/** Hoja inferior para cambiar a un jugador concreto (lesión, cansancio...). */
+function viewSubSheet(L) {
+  const outId = L.lineup[ui.sel.id];
+  const rec = recommendReplacement({
+    slots: slotsOf(L.formation), players: availablePlayers(L), lineup: L.lineup, outId, lockGK: L.gkHalftimeOnly && L.phase !== 'break',
+  });
+  if (!rec) return '';
+  const fitTxt = { yes: '', line: ' <span class="warn small">(misma línea)</span>', no: ' <span class="warn small">(fuera de posición)</span>' };
+  const main = rec.subs.find((x) => x.out === outId);
+  const recHtml = main?.in
+    ? `<div class="rec">
+        <div><span class="in">⬆ ${esc(nameOf(main.in))}</span> <span class="muted">(${slotLabel(L.formation, main.slotId)}) · ${mmss(playedNow(L, main.in))} jugados</span></div>
+        ${rec.moves.map((m) => `<div class="muted small">↔ ${esc(nameOf(m.pid))}: ${slotLabel(L.formation, m.from)} → ${slotLabel(L.formation, m.to)}</div>`).join('')}
+      </div>
+      <button class="btn primary block" data-action="sub-recommended">✅ Hacer este cambio</button>`
+    : '<p class="muted">No hay nadie disponible en el banquillo.</p>';
+  const others = rec.options.filter((o) => o.id !== main?.in);
+  return `<div class="sheet">
+    <div class="sheet-head"><b>Cambiar a ${esc(nameOf(outId))}</b> <span class="muted small">${slotLabel(L.formation, rec.slotId)} · ${mmss(playedNow(L, outId))} jugados</span>
+      <button class="mini" data-action="cancel-sel" aria-label="Cerrar">✕</button></div>
+    <label class="switch"><input type="checkbox" data-action="toggle-injured" ${ui.injured ? 'checked' : ''}> Lesionado: no vuelve a jugar</label>
+    <p class="label">Recomendado</p>
+    ${recHtml}
+    ${others.length ? `<p class="label">Otras opciones</p><div class="opts">${others.map((o) => `<button class="opt" data-action="sub-option" data-id="${o.id}">${esc(nameOf(o.id))} <span class="muted small">${mmss(o.played)}</span>${fitTxt[o.fit]}</button>`).join('')}</div>` : ''}
+    <p class="muted small">También puedes tocar a otro jugador del campo para intercambiar sus posiciones. Después del cambio, el plan se reorganiza.</p>
+  </div>`;
 }
 
 function changeText(L, c) {
@@ -556,7 +630,7 @@ function viewLive() {
         </button>`;
       }).join('')}
     </div>
-    <p class="hint muted small">${ui.sel ? 'Ahora toca el jugador con el que cambiarlo.' : 'Toca un jugador y después otro para cambiarlos (de sitio o con el banquillo).'}</p>
+    <p class="hint muted small">${ui.sel ? 'Ahora toca el jugador con el que cambiarlo.' : 'Toca un jugador para cambiarlo: la app te dirá quién debe entrar.'}</p>
   </section>`;
 
   // Banquillo
@@ -610,7 +684,10 @@ function viewLive() {
     ${L.phase !== 'end' ? '<button class="btn danger-outline" data-action="discard-match">Descartar partido</button>' : ''}
   </section>`;
 
-  return clock + banner + (L.phase === 'end' ? '' : pitch + benchHtml) + planHtml + table + footer;
+  const freqCard = L.phase === 'pre' ? `<section class="card"><h3>Cambios</h3>${freqControl('live', L.freq, L.halfLen)}</section>` : '';
+  const showSheet = ui.sel?.kind === 'slot' && L.lineup[ui.sel.id] && ['h1', 'h2', 'break'].includes(L.phase);
+  const sheet = showSheet ? viewSubSheet(L) : '';
+  return clock + banner + freqCard + (L.phase === 'end' ? '' : pitch + benchHtml) + planHtml + table + footer + sheet;
 }
 
 function clockText(L) {
@@ -768,6 +845,26 @@ const actions = {
   'back-to-setup': () => { db.live = null; ui.setupStep = 2; persist(); render(); },
   relineup: () => relineup(),
   tap: (d) => tapPlayer(d.kind, d.id),
+  'freq-mode': (d) => {
+    const cur = d.scope === 'setup' ? db.setup.freq : db.live.freq;
+    if (d.mode === 'auto') setFreq(d.scope, 'auto');
+    else setFreq(d.scope, cur === 'auto' ? 300 : Number(cur));
+  },
+  'freq-step': (d) => {
+    const cur = Number(d.scope === 'setup' ? db.setup.freq : db.live.freq) || 300;
+    const next = Math.min(20, Math.max(2, Math.round(cur / 60) + Number(d.d))) * 60;
+    setFreq(d.scope, next);
+  },
+  'cancel-sel': () => { ui.sel = null; ui.injured = false; render(); },
+  'sub-recommended': () => {
+    const L = db.live;
+    const outId = L.lineup[ui.sel.id];
+    const rec = recommendReplacement({
+      slots: slotsOf(L.formation), players: availablePlayers(L), lineup: L.lineup, outId, lockGK: L.gkHalftimeOnly && L.phase !== 'break',
+    });
+    if (rec) applyLineup(rec.after, [], { injuredId: ui.injured ? outId : null, manual: true });
+  },
+  'sub-option': (d) => tapPlayer('bench', d.id),
   'apply-next': () => { if (ui.next) applyLineup(ui.next.after, ui.next.keys); },
   'skip-next': () => {
     if (!ui.next) return;
@@ -843,6 +940,7 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('change', (e) => {
   const el = e.target;
+  if (el.dataset.action === 'toggle-injured') { ui.injured = el.checked; return; }
   if (el.dataset.action === 'toggle-available' || el.dataset.action === 'toggle-squad') {
     actions[el.dataset.action](el.dataset);
     return;

@@ -14,8 +14,9 @@ No necesita servidor ni cuentas: los datos se guardan en el propio teléfono y f
   - Reloj por partes (2 × 25 min), con pausa y tiempo añadido.
   - Minutos de cada jugador en tiempo real.
   - Cuenta atrás hasta el próximo cambio. Cuando toca, suena un aviso y aparece “¡Toca cambio!” con quién entra, quién sale y en qué puesto → **Hacer cambios** u **Omitir**.
-  - Cambios manuales: toca un jugador y después otro (del campo o del banquillo). El plan se recalcula solo.
-  - Lesiones o alguien que llega tarde: márcalo como *No disponible* / *Disponible*.
+  - **Cambio no previsto** (lesión, cansancio...): toca al jugador en el campo y la app te dice quién debe entrar (el del banquillo que encaja en ese puesto y menos ha jugado), con otras opciones ordenadas. Si marcas *Lesionado*, ya no vuelve a contar para el partido. Tras el cambio, se reorganizan todos los cambios siguientes.
+  - También puedes tocar un jugador y después otro (del campo o del banquillo) para intercambiarlos.
+  - Alguien que llega tarde o se va: márcalo como *No disponible* / *Disponible* en la tabla de minutos.
   - Marcador, **Deshacer**, y la pantalla se mantiene encendida.
 - **Estadísticas**: convocatorias, partidos jugados, minutos totales y media por jugador, e historial de partidos.
 - **Copia de seguridad**: exportar e importar en JSON (también sirve para pasar los datos a otro móvil).
@@ -25,7 +26,8 @@ No necesita servidor ni cuentas: los datos se guardan en el propio teléfono y f
 - En cada cambio busca la mejor combinación de jugadores y puestos (algoritmo húngaro): entran los que menos minutos llevan, cada uno en una posición que sabe jugar (si no hay nadie, primero alguien de la misma línea, p. ej. un LD de lateral izquierdo, y solo como último recurso alguien de otra línea), y procura no mover a quien ya está jugando.
 - En modo **Automático** prueba varios calendarios de cambios y elige el que deja los minutos más iguales con el menor número de cambios. Con un portero fijo, los jugadores de campo acaban con los mismos minutos o casi.
 - Opción *“El portero solo cambia en el descanso”* (activada por defecto). Si hay dos porteros, se reparten las partes, y el que vaya a ser portero en la 2ª parte descansa más en la 1ª.
-- También se puede elegir una frecuencia fija (cada 5, 6¼, 8⅓ o 12½ min).
+- O eliges tú **cada cuántos minutos** se hacen los cambios (de 2 a 20 min), al preparar el partido o en la previa, antes de empezar. Los cambios se hacen en esos minutos de cada parte, y también en el descanso.
+- Si no queda nadie de la posición exacta, puede usar a alguien de la misma línea (p. ej. un central de lateral) cuando eso evita que un jugador acumule bastantes más minutos que el resto.
 
 ## Instalarla en el iPhone
 

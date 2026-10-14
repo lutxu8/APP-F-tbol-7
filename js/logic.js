@@ -153,7 +153,8 @@ export function optimizeLineup({
         if (cs !== slot.id) v += 2 * g * (slot.role === 'POR' || roleOfSlot[cs] === 'POR' ? 3 : movePenaltyMin);
       }
       const fit = fitFor(r.positions, slot);
-      if (fit === 'line') v += OUT / 10;
+      // Misma línea, otra posición: se acepta si evita una diferencia de minutos de unos 5'.
+      if (fit === 'line') v += 2 * g * 5;
       else if (fit === 'no') v += slot.role === 'POR' ? 3 * OUT : OUT;
       row[c] = v;
     }
@@ -403,4 +404,36 @@ export function seasonStats(players, matches) {
     }
   }
   return stats;
+}
+
+/**
+ * Cambio no previsto (lesión, cansancio...): quién debería sustituir a `outId`.
+ * Mantiene al resto del once en su sitio salvo que una recolocación evite
+ * jugar fuera de posición. Devuelve la alineación recomendada y, aparte, todas
+ * las opciones del banquillo ordenadas (encaje en el puesto y minutos jugados).
+ *
+ * players: disponibles [{ id, positions, played }] (incluido `outId`).
+ */
+export function recommendReplacement({ slots, players, lineup, outId, lockGK = false }) {
+  const slotId = Object.keys(lineup).find((s) => lineup[s] === outId);
+  if (!slotId) return null;
+  const slot = slots.find((s) => s.id === slotId);
+  const current = { ...lineup, [slotId]: null };
+  const others = players.filter((p) => p.id !== outId);
+  const after = optimizeLineup({
+    slots,
+    players: others.map((p, i) => ({ ...p, tie: i })),
+    current,
+    lockGK: lockGK && slot.role !== 'POR',
+    gapMin: 5,
+    hysteresisMin: 15,
+    movePenaltyMin: 2,
+  });
+  const onField = new Set(Object.values(lineup).filter(Boolean));
+  const rank = { yes: 0, line: 1, no: 2 };
+  const options = others
+    .filter((p) => !onField.has(p.id))
+    .map((p) => ({ id: p.id, played: p.played, fit: fitFor(p.positions, slot) }))
+    .sort((a, b) => rank[a.fit] - rank[b.fit] || a.played - b.played);
+  return { slotId, after, ...diffLineups(lineup, after), options };
 }
