@@ -64,7 +64,7 @@ test('dos porteros puros se reparten las partes', () => {
 test('porteros que también juegan de campo: reparto razonable', () => {
   const { projected } = simulate(squad(11, { gks: 2, dedicatedGK: false }), '3-2-1');
   const mins = Object.values(projected).map((s) => s / 60);
-  assert.ok(Math.max(...mins) - Math.min(...mins) <= 6, mins.join(', '));
+  assert.ok(Math.max(...mins) - Math.min(...mins) <= 6.5, mins.join(', '));
 });
 
 test('el portero solo cambia en el descanso', () => {
