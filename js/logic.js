@@ -376,7 +376,7 @@ export function diffLineups(before, after) {
  */
 export function planMatch({
   slots, players, lineup, phase, halfSec = 0, halfLen, points: basePoints = [], handled = new Set(), gkHalftimeOnly = true, firstStep = null,
-  stepVariants = {},
+  stepVariants = {}, forced = {},
 }) {
   handled = handled instanceof Set ? handled : new Set(handled);
   const played = Object.fromEntries(players.map((p) => [p.id, p.played || 0]));
@@ -441,7 +441,10 @@ export function planMatch({
     const gapMin = Math.max(30, nextNominal - nominal(point)) / 60;
     const lockGK = gkHalftimeOnly && !point.halftime;
     const gkCommitMin = gkHalftimeOnly ? Math.max(30, halfLen - Math.min(point.t, halfLen)) / 60 : gapMin;
-    const after = optimizeLineup({
+    // Un cambio ya anunciado (fijado) se mantiene tal cual si sigue siendo posible.
+    const forcedKey = [point.key, ...st.keys].find((k) => forced[k]);
+    const forcedLineup = forcedKey && Object.values(forced[forcedKey]).every((pid) => !pid || avail.has(pid)) ? forced[forcedKey] : null;
+    const after = forcedLineup ? { ...forcedLineup } : optimizeLineup({
       slots,
       players: players.map((p, j) => ({
         id: p.id,

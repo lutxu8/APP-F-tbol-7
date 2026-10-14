@@ -13,7 +13,7 @@ No necesita servidor ni cuentas: los datos se guardan en el propio teléfono y f
 - **Durante el partido**:
   - Reloj por partes (2 × 25 min), con pausa y tiempo añadido.
   - Minutos de cada jugador en tiempo real.
-  - Cuenta atrás hasta el próximo cambio. Cuando toca, aparece “¡Toca cambio!” con quién entra, quién sale y en qué puesto, y salta una **alarma que no para** (pitido cada segundo y medio, la pantalla parpadea y, si estás en otra pestaña, sale una barra para volver al partido) hasta que pulsas **Hacer cambios** (u **Omitir**).
+  - Cuenta atrás hasta el próximo cambio. El **próximo cambio queda fijado** en cuanto se anuncia (minuto, quién entra, quién sale y en qué puesto) y el aviso será exactamente ese; solo se vuelve a calcular si haces un cambio a mano, deshaces o alguien deja de estar disponible. Cuando toca, aparece “¡Toca cambio!” con quién entra, quién sale y en qué puesto, y salta una **alarma que no para** (pitido cada segundo y medio, la pantalla parpadea y, si estás en otra pestaña, sale una barra para volver al partido) hasta que pulsas **Hacer cambios** (u **Omitir**).
   - **Cambio no previsto** (lesión, cansancio...): toca al jugador en el campo y la app te dice quién debe entrar (el del banquillo que encaja en ese puesto y menos ha jugado), con otras opciones ordenadas. Si marcas *Lesionado*, ya no vuelve a contar para el partido. Tras el cambio, se reorganizan todos los cambios siguientes.
   - También puedes tocar un jugador y después otro (del campo o del banquillo) para intercambiarlos.
   - Alguien que llega tarde o se va: márcalo como *No disponible* / *Disponible* en la tabla de minutos.

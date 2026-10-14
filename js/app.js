@@ -201,6 +201,7 @@ function planBase(L) {
   };
 }
 function recomputeSchedule(L) {
+  L.locked = null; // el próximo cambio se vuelve a anunciar con el plan nuevo
   const base = planBase(L);
   if (L.freq === 'auto') {
     const best = chooseSchedule(base, { firstSec: L.firstChange || null, current: L.phase === 'pre' ? null : L.points });
@@ -229,16 +230,37 @@ function computePlan() {
     ui.next = planCache.next;
     return ui.plan;
   }
-  let plan = planMatchRefined({ ...planBase(L), points: L.points });
+  const forcedOf = () => (L.locked ? { [L.locked.key]: L.locked.after } : {});
+  const run = () => planMatchRefined({ ...planBase(L), points: L.points, forced: forcedOf() });
+  let plan = run();
   // Un cambio pendiente que no cambia nada se da por hecho.
   let guard = 0;
   while (plan.changes[0]?.due && !plan.changes[0].subs.length && !plan.changes[0].moves.length && plan.changes[0].keys.length && guard++ < 5) {
     L.handled.push(...plan.changes[0].keys);
     persist();
-    plan = planMatchRefined({ ...planBase(L), points: L.points });
+    plan = run();
+  }
+  const isLocked = (c) => L.locked && (c.key === L.locked.key || c.keys.includes(L.locked.key));
+  let next = L.locked ? plan.changes.find(isLocked) : null;
+  // El cambio fijado ya no es posible (p. ej. alguien no disponible): se anuncia otro.
+  if (L.locked && (!next || !next.subs.length && !next.moves.length || L.phase === 'end')) { L.locked = null; next = null; }
+  if (!L.locked && L.phase !== 'end') {
+    next = plan.changes.find((c) => c.subs.length || c.moves.length) || null;
+    if (next) {
+      // Se fija el próximo cambio: el aviso será exactamente este. Los momentos
+      // anteriores sin cambios se descartan para que no salten avisos distintos.
+      for (const c of plan.changes) {
+        if (c === next) break;
+        for (const k of c.keys) if (!L.handled.includes(k)) L.handled.push(k);
+      }
+      L.locked = { key: next.key, half: next.half, t: next.t, after: { ...next.after } };
+      persist();
+      plan = run();
+      next = plan.changes.find(isLocked) || next;
+    }
   }
   ui.plan = plan;
-  ui.next = plan.changes.find((c) => c.subs.length || c.moves.length) || null;
+  ui.next = next;
   planCache = { live: L, ver: dataVersion, ts: now, plan, next: ui.next };
   return plan;
 }
@@ -323,7 +345,8 @@ function startHalf(h) {
   } else {
     L.phase = 'h2';
     L.halfStart[2] = L.elapsed;
-    if (L.freq === 'auto') recomputeSchedule(L);
+    // No se replanifica al empezar la 2ª parte si ya hay un cambio anunciado.
+    if (L.freq === 'auto' && !L.locked) recomputeSchedule(L);
   }
   L.running = true;
   L.anchorTs = Date.now();
@@ -413,6 +436,7 @@ function applyLineup(after, keys, { injuredId = null, manual = false } = {}) {
   }
   L.lineup = { ...after };
   L.handled.push(...keys);
+  L.locked = null;
   const half = L.phase === 'h2' || L.phase === 'break' ? 2 : 1;
   for (const s of subs) L.log.push({ half, t: Math.round(halfSecNow(L)), in: s.in, out: s.out, slot: s.slotId, ...(manual ? { manual } : {}), ...(s.out === injuredId ? { injured: true } : {}) });
   for (const m of moves) L.log.push({ half, t: Math.round(halfSecNow(L)), move: m.pid, from: m.from, to: m.to });
@@ -432,6 +456,7 @@ function tapPlayer(kind, id) {
   if (!sel) { ui.sel = { kind, id }; render(); return; }
   if (sel.kind === kind && sel.id === id) { ui.sel = null; render(); return; }
   if (sel.kind === 'bench' && kind === 'bench') { ui.sel = { kind, id }; render(); return; }
+  L.locked = null; // un cambio a mano obliga a anunciar de nuevo el siguiente
   if (L.phase !== 'pre' && sel.kind !== kind) {
     const slotId = sel.kind === 'slot' ? sel.id : id;
     const benchId = sel.kind === 'bench' ? sel.id : id;
@@ -485,6 +510,7 @@ function undo() {
   const snap = L.undo?.pop();
   if (!snap) return;
   Object.assign(L, JSON.parse(snap));
+  L.locked = null;
   ui.sel = null;
   persist();
   render();
@@ -749,6 +775,7 @@ function viewLive() {
     banner = `<section class="card banner ${isDue ? 'due' : ''}">
       <div class="banner-head">${head}</div>
       ${changeText(L, next)}
+      ${isDue ? '' : '<p class="muted small">Este cambio queda fijado: será el que avise la alarma. Solo cambia si haces un cambio a mano o alguien deja de estar disponible.</p>'}
       ${L.phase === 'pre' ? '' : `<div class="toolbar">
         <button class="btn primary grow" data-action="apply-next">${isDue ? '✅ Hacer cambios' : 'Adelantar ahora'}</button>
         ${isDue ? '<button class="btn" data-action="skip-next">Omitir</button>' : ''}
@@ -1021,6 +1048,7 @@ const actions = {
     if (!ui.next) return;
     const L = db.live; snapshot(L);
     L.handled.push(...ui.next.keys);
+    L.locked = null;
     if (L.freq === 'auto') recomputeSchedule(L);
     persist(); render();
   },
