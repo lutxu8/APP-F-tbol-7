@@ -3,7 +3,7 @@ import { migratePositions } from './logic.js';
 
 const KEY = 'futbol7-rotaciones.v1';
 
-export const DEFAULT_SETTINGS = { teamName: 'Mi equipo', halfMinutes: 25, maxSquad: 12 };
+export const DEFAULT_SETTINGS = { teamName: 'Mi equipo', halfMinutes: 25, maxSquad: 12, maxBench: 9 };
 
 function fresh() {
   return { version: 1, players: [], matches: [], settings: { ...DEFAULT_SETTINGS }, setup: null, live: null };

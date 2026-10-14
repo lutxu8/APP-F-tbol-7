@@ -117,6 +117,7 @@ export function hungarian(cost) {
 export function optimizeLineup({
   slots, players, current = {}, lockGK = false, gapMin = 6, gkCommitMin = null, hysteresisMin = 2, movePenaltyMin = 0.5,
   minStintMin = 5, stintPenaltyMin = 15, linePenaltyMin = 1, offPenaltyMin = 2.5,
+  maxBenchMin = null, benchPenaltyMin = 8,
 }) {
   const slotOf = {};
   const ids = new Set(players.map((p) => p.id));
@@ -141,6 +142,8 @@ export function optimizeLineup({
         if (r.id && r.id === lockedGK) row[c] = BIG;
         // Quitar a quien acaba de entrar (menos de minStintMin) penaliza.
         else if (slotOf[r.id] && r.stint != null && r.stint < minStintMin * 60) row[c] = 2 * g * stintPenaltyMin;
+        // Quien está en el banquillo y pasaría de maxBenchMin seguidos si no entra ahora, debe entrar.
+        else if (maxBenchMin && !slotOf[r.id] && r.benched != null && r.benched + g * 60 > maxBenchMin * 60 + 1) row[c] = 2 * g * benchPenaltyMin;
         else row[c] = 0;
         continue;
       }
@@ -240,7 +243,7 @@ function scorePlan(plan) {
   const subs = plan.changes.reduce((a, c) => a + c.subs.length, 0);
   const events = plan.changes.filter((c) => c.subs.length).length;
   const short = plan.changes.reduce((a, c) => a + (c.shortOuts || 0), 0);
-  return variance + 2 * short + 0.03 * subs + 0.25 * events;
+  return variance + 2 * short + 1.5 * (plan.benchExcessMin || 0) + 0.03 * subs + 0.25 * events;
 }
 
 /**
@@ -377,7 +380,7 @@ export function diffLineups(before, after) {
  */
 export function planMatch({
   slots, players, lineup, phase, halfSec = 0, halfLen, points: basePoints = [], handled = new Set(), gkHalftimeOnly = true, firstStep = null,
-  stepVariants = {}, forced = {}, mustChange = [],
+  stepVariants = {}, forced = {}, mustChange = [], maxBenchMin = null,
 }) {
   handled = handled instanceof Set ? handled : new Set(handled);
   const played = Object.fromEntries(players.map((p) => [p.id, p.played || 0]));
@@ -415,6 +418,14 @@ export function planMatch({
   // Desde cuándo (segundo nominal) está cada uno en el campo, para no quitar a quien acaba de entrar.
   const stintStart = {};
   for (const p of players) if (Object.values(cur).includes(p.id)) stintStart[p.id] = nominal(pos) - (phase === 'pre' ? 0 : p.stint ?? 1e6);
+  // Desde cuándo está cada uno en el banquillo (los porteros puros no cuentan: esperan su parte).
+  const onlyGK = (p) => (p.positions || []).length > 0 && p.positions.every((x) => x === 'POR');
+  const benchStart = {};
+  for (const p of players) {
+    if (!Object.values(cur).includes(p.id) && !onlyGK(p)) benchStart[p.id] = nominal(pos) - (phase === 'pre' ? 0 : p.benched ?? 0);
+  }
+  let benchExcess = 0;
+  const maxBenchSec = maxBenchMin ? maxBenchMin * 60 : null;
   const steps = [];
   const hasEmptySlot = slots.some((s) => !cur[s.id]) && players.some((p) => !Object.values(cur).includes(p.id));
   if (due.length || (hasEmptySlot && phase !== 'pre')) {
@@ -452,12 +463,14 @@ export function planMatch({
         positions: p.positions,
         played: played[p.id] + (point.h === 1 && !point.halftime ? virtual[p.id] || 0 : 0),
         stint: stintStart[p.id] != null ? nominal(point) - stintStart[p.id] : null,
+        benched: benchStart[p.id] != null ? nominal(point) - benchStart[p.id] : null,
         tie: j,
       })),
       current: cur,
       lockGK,
       gapMin,
       gkCommitMin,
+      maxBenchMin,
       // Margen para no cambiar por poco: proporcional al tramo que viene (al final del partido, menor).
       hysteresisMin: (point.halftime && !halftimeIsBoundary ? hysteresisMin * 3 : Math.min(hysteresisMin, hysteresisFor(gapMin * 60)))
         * ((i === 0 && firstStep ? firstStep : stepVariants[i])?.hysteresisMul ?? 1),
@@ -482,12 +495,18 @@ export function planMatch({
       if (sb.out && stintStart[sb.out] != null && nominal(point) - stintStart[sb.out] < 300) shortOuts++;
       if (sb.out) delete stintStart[sb.out];
       if (sb.in) stintStart[sb.in] = nominal(point);
+      if (sb.in && benchStart[sb.in] != null) {
+        if (maxBenchSec) benchExcess += Math.max(0, nominal(point) - benchStart[sb.in] - maxBenchSec);
+        delete benchStart[sb.in];
+      }
+      if (sb.out && !onlyGK(players.find((p) => p.id === sb.out) || {})) benchStart[sb.out] = nominal(point);
     }
     changes.push({ key: point.key, keys: st.keys, half: point.h, t: point.t, due: st.due, halftime: point.halftime, before: cur, after, subs, moves, shortOuts });
     cur = after;
   });
   advance({ h: 2, t: halfLen });
-  return { changes, projected: played };
+  if (maxBenchSec) for (const st of Object.values(benchStart)) benchExcess += Math.max(0, 2 * halfLen - st - maxBenchSec);
+  return { changes, projected: played, benchExcessMin: benchExcess / 60 };
 }
 
 /**
@@ -602,6 +621,7 @@ const VARIANTS = [
   { hysteresisMul: 0, opts: { linePenaltyMin: 1.5, offPenaltyMin: 5 } },
   { hysteresisMul: 1, opts: { stintPenaltyMin: 12 } },
   { hysteresisMul: 1, gapMul: 2 }, { hysteresisMul: 1, gapMul: 0.5 },
+  { hysteresisMul: 1, opts: { benchPenaltyMin: 5 } }, { hysteresisMul: 0.5, opts: { benchPenaltyMin: 30 } },
 ];
 
 export function planMatchBest(params) {

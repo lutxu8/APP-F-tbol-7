@@ -244,3 +244,28 @@ test('la primera remesa fijada siempre tiene cambios, sea cual sea el minuto', (
     }
   }
 });
+
+test('nadie pasa más de 9 min seguidos en el banquillo (9 a 13 convocados)', () => {
+  const R5 = ['LI', 'DFC', 'LD', 'MED', 'DEL'];
+  for (const n of [9, 10, 11, 12, 13]) {
+    const players = [{ id: 'gk', positions: ['POR'], played: 0 }];
+    for (let i = 0; i < n - 1; i++) players.push({ id: 'p' + i, positions: [R5[i % 5], R5[(i + 2) % 5]], played: 0 });
+    const slots = FORMATIONS['3-2-1'].slots;
+    const lineup = optimizeLineup({ slots, players, gkCommitMin: 25 });
+    const base = { slots, players, lineup, phase: 'pre', halfLen: HALF, gkHalftimeOnly: true, mustChange: ['1-480'], maxBenchMin: 9 };
+    const plan = planMatchRefined({ ...base, points: chooseSchedule(base, { firstSec: 480 }).points });
+    const nom = (c) => (c.half - 1) * HALF + c.t;
+    const since = {};
+    let worst = 0;
+    for (const p of players.slice(1)) if (!Object.values(lineup).includes(p.id)) since[p.id] = 0;
+    for (const c of plan.changes) {
+      for (const s of c.subs) {
+        if (s.in && since[s.in] != null) { worst = Math.max(worst, nom(c) - since[s.in]); delete since[s.in]; }
+        if (s.out) since[s.out] = nom(c);
+      }
+    }
+    for (const v of Object.values(since)) worst = Math.max(worst, 2 * HALF - v);
+    assert.ok(worst <= 9 * 60 + 1, `n=${n}: ${(worst / 60).toFixed(1)} min seguidos en el banquillo`);
+    assert.equal(plan.changes.reduce((a, c) => a + c.shortOuts, 0), 0, `n=${n}: alguien sale con menos de 5 min`);
+  }
+});

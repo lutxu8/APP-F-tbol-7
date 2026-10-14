@@ -185,6 +185,8 @@ function availablePlayers(L) {
       played: playedNow(L, id),
       // Tiempo en el campo desde que entró (para no quitar a quien lleva menos de 5').
       stint: L.phase !== 'pre' && onField(L, id) && L.enteredAt[id] != null ? clockNow(L) - L.enteredAt[id] : null,
+      // Tiempo seguido en el banquillo (desde que salió, o desde el inicio si aún no ha jugado).
+      benched: L.phase !== 'pre' && !onField(L, id) ? clockNow(L) - ((L.leftAt || {})[id] ?? 0) : null,
     }));
 }
 function planBase(L) {
@@ -197,6 +199,7 @@ function planBase(L) {
     halfLen: L.halfLen,
     handled: new Set(L.handled),
     gkHalftimeOnly: L.gkHalftimeOnly,
+    maxBenchMin: Number(db.settings.maxBench) || null,
     // La primera remesa fijada por el usuario siempre tiene cambios.
     mustChange: L.freq === 'auto' && L.firstChange && L.firstChange < L.halfLen ? [pointKey({ h: 1, t: L.firstChange })] : [],
   };
@@ -305,6 +308,7 @@ function startMatchFromSetup() {
     halfStart: { 1: 0, 2: null },
     lineup: {},
     acc: Object.fromEntries(squad.map((id) => [id, 0])),
+    leftAt: {},
     enteredAt: {},
     handled: [],
     points: [],
@@ -415,6 +419,7 @@ function substitute(L, outId, inId, slotId, c) {
   if (outId) {
     if (L.enteredAt[outId] != null) L.acc[outId] = (L.acc[outId] || 0) + (c - L.enteredAt[outId]);
     delete L.enteredAt[outId];
+    if (L.phase !== 'pre') (L.leftAt ||= {})[outId] = c;
   }
   if (inId && L.phase !== 'pre') L.enteredAt[inId] = c;
   L.lineup[slotId] = inId;
@@ -433,6 +438,7 @@ function applyLineup(after, keys, { injuredId = null, manual = false } = {}) {
     if (pid && !Object.values(after).includes(pid) && live) {
       if (L.enteredAt[pid] != null) L.acc[pid] = (L.acc[pid] || 0) + (c - L.enteredAt[pid]);
       delete L.enteredAt[pid];
+      (L.leftAt ||= {})[pid] = c;
     }
   }
   for (const pid of Object.values(after)) {
@@ -497,6 +503,7 @@ function toggleUnavailable(pid) {
   snapshot(L);
   if (L.unavailable.includes(pid)) {
     L.unavailable = L.unavailable.filter((x) => x !== pid);
+    if (L.phase !== 'pre') (L.leftAt ||= {})[pid] = clockNow(L); // vuelve a estar disponible desde ahora
   } else {
     if (!confirm(`¿Marcar a ${nameOf(pid)} como no disponible (lesión, se ha ido...)?`)) { L.undo.pop(); return; }
     const slotId = Object.keys(L.lineup).find((s) => L.lineup[s] === pid);
@@ -645,7 +652,7 @@ function freqControl(scope, freq, halfLen, adjust = true, points = null, first =
     detail = pts.length ? `Cambios en el min ${joinY(pts)} de cada parte, y en el descanso.` : 'Solo habrá cambios en el descanso.';
     if (adjust && pts.length) detail += ' Alguno puede moverse hasta 3 min para que todos jueguen lo mismo.';
   } else if (first) {
-    detail = `Primera remesa en el min ${fmtMin(first)}. Después la app decide cuándo cambiar para que todos jueguen lo mismo, sin quitar a nadie que lleve menos de 5 min en el campo.`;
+    detail = `Primera remesa en el min ${fmtMin(first)}. Después la app decide cuándo cambiar para que todos jueguen lo mismo, sin quitar a nadie que lleve menos de 5 min en el campo${Number(db.settings.maxBench) ? ` ni dejar a nadie más de ${db.settings.maxBench} min seguidos en el banquillo` : ''}.`;
   } else {
     detail = 'La app elige los momentos que dejan los minutos más iguales con el menor número de cambios.';
   }
@@ -930,6 +937,10 @@ function viewSettings() {
       <label>Minutos por parte<input type="number" inputmode="numeric" min="5" max="45" data-bind="settings.halfMinutes" value="${esc(s.halfMinutes)}"></label>
       <label>Máx. convocados<input type="number" inputmode="numeric" min="7" max="25" data-bind="settings.maxSquad" value="${esc(s.maxSquad)}"></label>
     </div>
+    <label>Máximo seguido en el banquillo<select data-bind="settings.maxBench">
+      ${[['8', '8 minutos'], ['9', '9 minutos'], ['10', '10 minutos'], ['0', 'Sin límite']].map(([v, l]) => `<option value="${v}" ${String(s.maxBench ?? 9) === v ? 'selected' : ''}>${l}</option>`).join('')}
+    </select></label>
+    <p class="muted small">La app procura que nadie pase más de ese tiempo seguido sin jugar (los porteros que solo son porteros no cuentan). Con muchos convocados (13–14) puede no ser posible del todo.</p>
   </section>
   <section class="card">
     <h2>Compartir y copia de seguridad</h2>
@@ -1181,6 +1192,7 @@ function bind(el, rerender) {
   obj[last] = v;
   if (root !== 'modal') persist();
   if (root === 'settings' && last === 'teamName') document.getElementById('team-name').textContent = v || 'Fútbol 7';
+  if (root === 'settings' && last === 'maxBench' && db.live && db.live.phase !== 'end') { recomputeSchedule(db.live); persist(); }
   if (rerender && root !== 'modal' && el.type !== 'text') render();
 }
 

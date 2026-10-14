@@ -26,7 +26,8 @@ No necesita servidor ni cuentas: los datos se guardan en el propio teléfono y f
 - Orden de prioridades al decidir los cambios:
   1. **Que todos jueguen lo mismo.**
   2. **No quitar a nadie que lleve menos de 5 minutos** en el campo desde que entró.
-  3. **Respetar las posiciones** de cada uno: si hace falta para igualar minutos, primero alguien de la misma línea (p. ej. un LD de lateral izquierdo) y, si no basta, de otra línea. La portería, siempre un portero, y quien solo es portero nunca juega de campo.
+  3. **Que nadie pase más de 9 minutos seguidos en el banquillo** (se puede cambiar a 8, 10 o sin límite en *Ajustes*). Los porteros que solo son porteros no cuentan. Con 13–14 convocados puede no ser posible del todo.
+  4. **Respetar las posiciones** de cada uno: si hace falta para igualar minutos, primero alguien de la misma línea (p. ej. un LD de lateral izquierdo) y, si no basta, de otra línea. La portería, siempre un portero, y quien solo es portero nunca juega de campo.
 - En cada remesa busca la mejor combinación de jugadores y puestos (algoritmo húngaro). Para el plan completo, revisa remesa a remesa varias alternativas y se queda con la que deja los minutos finales más iguales. Procura no mover a quien ya está jugando. En pruebas con plantillas variadas, los jugadores de campo acaban con 0–1½ minutos de diferencia.
 - En modo **Automático** puedes **fijar el minuto de la primera remesa** (por defecto, el 8). A partir de ahí, la app decide cuándo cambiar, y después de cada remesa vuelve a planificar con los minutos reales (por ejemplo, si un cambio se confirmó tarde). Deja al menos 3 minutos entre remesas y no propone cambios en los últimos 2½ minutos de cada parte. Si no fijas la primera remesa, elige también ese momento.
 - Opción *“El portero solo cambia en el descanso”* (activada por defecto). Si hay dos porteros, se reparten las partes, y el que vaya a ser portero en la 2ª parte descansa más en la 1ª.
