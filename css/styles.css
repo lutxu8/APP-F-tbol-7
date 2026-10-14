@@ -251,3 +251,11 @@ body.alarm::after {
   animation: pulse 1.2s ease-in-out infinite;
 }
 .banner.due .banner-head span { display: block; margin-top: 2px; font-weight: 500; }
+
+/* Sonido de los avisos */
+.sound-hint {
+  display: block; width: 100%; margin-top: 10px; padding: 10px; border-radius: 10px;
+  border: 2px solid var(--warn); background: #33300f; color: var(--warn); font-weight: 700; font-size: .95rem;
+}
+.sound-hint[hidden] { display: none; }
+.sound-test { margin-top: 10px; }
