@@ -1,5 +1,5 @@
 // Funciona sin conexión: sirve desde caché y actualiza en segundo plano.
-const CACHE = 'futbol7-v4';
+const CACHE = 'futbol7-v5';
 const ASSETS = [
   './',
   './index.html',

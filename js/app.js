@@ -40,31 +40,111 @@ function posChips(positions) {
 }
 
 // ---------- sonido, vibración y pantalla encendida ----------
+// En iOS el audio de una página solo se puede activar con un toque del usuario,
+// y Safari lo suspende si pasa un rato sin sonar nada. Por eso:
+//  1) cada toque en la pantalla reactiva el audio,
+//  2) durante el partido suena un bucle silencioso que mantiene el audio despierto,
+//  3) si aun así el audio web está parado, se usa un <audio> ya desbloqueado como respaldo.
 let audioCtx = null;
+let keepAlive = null;
+let beepEl = null;
+let beepElReady = false;
+
+function beepWavUrl() {
+  // Tres pitidos (880/660/880 Hz) en un WAV generado al vuelo.
+  const rate = 22050;
+  const tones = [880, 660, 880];
+  const beepLen = Math.round(rate * 0.25);
+  const gap = Math.round(rate * 0.1);
+  const n = tones.length * (beepLen + gap);
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const str = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, n * 2, true);
+  let o = 44;
+  tones.forEach((f) => {
+    for (let i = 0; i < beepLen; i++) {
+      const env = Math.min(1, i / 200, (beepLen - i) / 200);
+      v.setInt16(o, Math.sign(Math.sin((2 * Math.PI * f * i) / rate)) * 9000 * env, true);
+      o += 2;
+    }
+    o += gap * 2;
+  });
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
 function ensureAudio() {
   try {
     if (navigator.audioSession) navigator.audioSession.type = 'playback';
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (!audioCtx || audioCtx.state === 'closed') {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      keepAlive = null;
+    }
+    if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
+  } catch (e) { /* sin audio */ }
+  // Desbloquea el <audio> de respaldo dentro del gesto del usuario.
+  try {
+    if (!beepEl) { beepEl = new Audio(beepWavUrl()); beepEl.preload = 'auto'; }
+    if (!beepElReady) {
+      beepEl.muted = true;
+      const pr = beepEl.play();
+      if (pr) pr.then(() => { beepEl.pause(); beepEl.currentTime = 0; beepEl.muted = false; beepElReady = true; }).catch(() => { beepEl.muted = false; });
+    }
   } catch (e) { /* sin audio */ }
 }
+
+/** Bucle silencioso mientras el partido está en juego para que iOS no duerma el audio. */
+function syncKeepAlive() {
+  const L = db.live;
+  const want = L && L.phase !== 'pre' && L.phase !== 'end';
+  try {
+    if (want && audioCtx && !keepAlive) {
+      const src = audioCtx.createBufferSource();
+      src.buffer = audioCtx.createBuffer(1, audioCtx.sampleRate, audioCtx.sampleRate);
+      src.loop = true;
+      const g = audioCtx.createGain();
+      g.gain.value = 0.0001;
+      src.connect(g).connect(audioCtx.destination);
+      src.start();
+      keepAlive = src;
+    } else if (!want && keepAlive) {
+      keepAlive.stop();
+      keepAlive = null;
+    }
+  } catch (e) { keepAlive = null; }
+}
+
 function beep(times = 3) {
   try { navigator.vibrate?.([300, 150, 300, 150, 300]); } catch (e) { /* */ }
-  if (!audioCtx) return;
-  const t0 = audioCtx.currentTime;
-  for (let i = 0; i < times; i++) {
-    const o = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    o.type = 'square';
-    o.frequency.value = i % 2 ? 660 : 880;
-    g.gain.setValueAtTime(0.0001, t0 + i * 0.35);
-    g.gain.exponentialRampToValueAtTime(0.25, t0 + i * 0.35 + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.35 + 0.25);
-    o.connect(g).connect(audioCtx.destination);
-    o.start(t0 + i * 0.35);
-    o.stop(t0 + i * 0.35 + 0.3);
+  if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
+  if (audioCtx && audioCtx.state === 'running') {
+    const t0 = audioCtx.currentTime;
+    for (let i = 0; i < times; i++) {
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = 'square';
+      o.frequency.value = i % 2 ? 660 : 880;
+      g.gain.setValueAtTime(0.0001, t0 + i * 0.35);
+      g.gain.exponentialRampToValueAtTime(0.25, t0 + i * 0.35 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.35 + 0.25);
+      o.connect(g).connect(audioCtx.destination);
+      o.start(t0 + i * 0.35);
+      o.stop(t0 + i * 0.35 + 0.3);
+    }
+    return;
+  }
+  // Respaldo: el audio web está parado; usamos el <audio> desbloqueado.
+  if (beepEl) {
+    try { beepEl.currentTime = 0; beepEl.play().catch(() => {}); } catch (e) { /* */ }
   }
 }
+
+// Cualquier toque reactiva el audio (iOS solo lo permite dentro de un gesto).
+['pointerdown', 'touchend', 'click'].forEach((ev) => document.addEventListener(ev, () => { ensureAudio(); syncKeepAlive(); }, { capture: true, passive: true }));
+
 let wakeLock = null;
 async function syncWakeLock() {
   const want = db.live && db.live.phase !== 'end' && document.visibilityState === 'visible';
@@ -1021,15 +1101,17 @@ function alarmTick() {
     document.body.classList.toggle('alarm', due);
     render();
   }
-  if (due) {
-    if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
-    beep(3);
-  }
+  syncKeepAlive();
+  if (due) beep(3);
 }
 setInterval(alarmTick, 1600);
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { render(); syncWakeLock(); }
+  if (document.visibilityState === 'visible') {
+    if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
+    render();
+    syncWakeLock();
+  }
 });
 
 if ('serviceWorker' in navigator) {
