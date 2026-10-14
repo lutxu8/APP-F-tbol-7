@@ -1,5 +1,5 @@
 import {
-  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, seasonStats, diffLineups,
+  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, adjustSchedule, positionWarnings, seasonStats, diffLineups,
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
@@ -206,6 +206,7 @@ function recomputeSchedule(L) {
     const handled = new Set(L.handled);
     if (L.phase !== 'pre') for (const p of L.points) if (p.h < curH || (p.h === curH && p.t <= t && !(p.h === 2 && p.t === 0))) handled.add(pointKey(p));
     L.handled = [...handled];
+    if (L.freqAdjust !== false) L.points = adjustSchedule({ ...base, handled }, L.points);
   }
 }
 function computePlan() {
@@ -247,6 +248,7 @@ function startMatchFromSetup() {
     rival: S.rival || '',
     formation: S.formation,
     freq: S.freq,
+    freqAdjust: S.freqAdjust !== false,
     gkHalftimeOnly: S.gkHalftimeOnly,
     halfLen,
     squad,
@@ -539,6 +541,7 @@ function viewSetup() {
   if (S.squad.length > max) warnings.push(`Has convocado a ${S.squad.length} y el máximo es ${max}.`);
   if (S.squad.length < 7) warnings.push(`Solo hay ${S.squad.length} convocados: hacen falta 7.`);
   if (!squadPlayers.some((p) => (p.positions || []).includes('POR'))) warnings.push('No hay ningún portero en la convocatoria.');
+  warnings.push(...positionWarningTexts(S.formation, squadPlayers));
   const formOpts = Object.entries(FORMATIONS).map(([k, f]) => `<button class="seg ${S.formation === k ? 'on' : ''}" data-action="set-formation" data-f="${k}">${f.name}</button>`).join('');
   return `<section class="card">
     <h2>Nuevo partido · 2/2</h2>
@@ -549,7 +552,7 @@ function viewSetup() {
     <h3>Sistema</h3>
     <div class="segmented">${formOpts}</div>
     <h3>Cambios</h3>
-    ${freqControl('setup', S.freq, Math.round((db.settings.halfMinutes || 25) * 60))}
+    ${freqControl('setup', S.freq, Math.round((db.settings.halfMinutes || 25) * 60), S.freqAdjust !== false)}
     <label class="switch"><input type="checkbox" data-bind="setup.gkHalftimeOnly" ${S.gkHalftimeOnly ? 'checked' : ''}> El portero solo cambia en el descanso</label>
     <div class="toolbar">
       <button class="btn" data-action="setup-back">← Atrás</button>
@@ -560,15 +563,29 @@ function viewSetup() {
 
 const fmtMin = (sec) => String(Math.round((sec / 60) * 100) / 100).replace('.', ',');
 
+const joinY = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} y ${xs[xs.length - 1]}` : xs[0]);
+
+/** Avisos de posiciones con pocos jugadores para el sistema elegido. */
+function positionWarningTexts(formation, players) {
+  return positionWarnings(slotsOf(formation), players, db.settings.halfMinutes || 25).map((w) => (w.count
+    ? `Solo ${w.count === 1 ? 'hay 1 jugador' : `hay ${w.count} jugadores`} para ${w.label} (${esc(joinY(w.names))}): ${w.count === 1 ? 'jugará' : 'jugarán'} más minutos que el resto. Marca a más jugadores en esa posición o cambia de sistema.`
+    : `Nadie puede jugar de ${w.label}: lo cubrirá alguien de otra posición.`));
+}
+
 /** Selector de cada cuántos minutos se hacen los cambios. */
-function freqControl(scope, freq, halfLen) {
+function freqControl(scope, freq, halfLen, adjust = true, points = null) {
   const fixed = freq !== 'auto';
   let detail;
-  if (fixed) {
+  if (fixed && points && adjust) {
+    // Ya hay plan: se muestran los minutos reales (con el ajuste aplicado).
+    const half = (h) => points.filter((p) => p.h === h && !(h === 2 && p.t === 0)).map((p) => mmss(p.t));
+    const h1 = half(1);
+    const h2 = half(2);
+    detail = `Cambios en el min ${h1.length ? joinY(h1) : '—'} de la 1ª parte, en el descanso y en el min ${h2.length ? joinY(h2) : '—'} de la 2ª.`;
+  } else if (fixed) {
     const pts = intervalPoints(halfLen, Number(freq)).filter((p) => p.h === 1).map((p) => fmtMin(p.t));
-    detail = pts.length
-      ? `Cambios en el min ${pts.length > 1 ? pts.slice(0, -1).join(', ') + ' y ' + pts[pts.length - 1] : pts[0]} de cada parte, y en el descanso.`
-      : 'Solo habrá cambios en el descanso.';
+    detail = pts.length ? `Cambios en el min ${joinY(pts)} de cada parte, y en el descanso.` : 'Solo habrá cambios en el descanso.';
+    if (adjust && pts.length) detail += ' Alguno puede moverse hasta 3 min para que todos jueguen lo mismo.';
   } else {
     detail = 'La app elige los momentos que dejan los minutos más iguales con el menor número de cambios.';
   }
@@ -580,7 +597,8 @@ function freqControl(scope, freq, halfLen) {
       <button class="btn" data-action="freq-step" data-scope="${scope}" data-d="-1" aria-label="Menos minutos">−</button>
       <div class="stepper-val">Cada <b>${fmtMin(Number(freq))}</b> min</div>
       <button class="btn" data-action="freq-step" data-scope="${scope}" data-d="1" aria-label="Más minutos">+</button>
-    </div>` : ''}
+    </div>
+    <label class="switch"><input type="checkbox" data-action="freq-adjust" data-scope="${scope}" ${adjust ? 'checked' : ''}> Ajustar algún cambio (±3 min) para igualar minutos</label>` : ''}
     <p class="muted small">${detail}</p>`;
 }
 
@@ -767,7 +785,8 @@ function viewLive() {
     ${L.phase !== 'end' ? '<button class="btn danger-outline" data-action="discard-match">Descartar partido</button>' : ''}
   </section>`;
 
-  const freqCard = L.phase === 'pre' ? `<section class="card"><h3>Cambios</h3>${freqControl('live', L.freq, L.halfLen)}</section>` : '';
+  const posWarn = L.phase === 'pre' ? positionWarningTexts(L.formation, availablePlayers(L).map((p) => playerById(p.id))) : [];
+  const freqCard = L.phase === 'pre' ? `<section class="card">${posWarn.map((w) => `<p class="warn">⚠️ ${w}</p>`).join('')}<h3>Cambios</h3>${freqControl('live', L.freq, L.halfLen, L.freqAdjust !== false, L.points)}</section>` : '';
   const showSheet = ui.sel?.kind === 'slot' && L.lineup[ui.sel.id] && ['h1', 'h2', 'break'].includes(L.phase);
   const sheet = showSheet ? viewSubSheet(L) : '';
   return clock + banner + freqCard + (L.phase === 'end' ? '' : pitch + benchHtml) + planHtml + table + footer + sheet;
@@ -1024,6 +1043,12 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset.action === 'toggle-injured') { ui.injured = el.checked; return; }
+  if (el.dataset.action === 'freq-adjust') {
+    if (el.dataset.scope === 'setup') db.setup.freqAdjust = el.checked;
+    else { db.live.freqAdjust = el.checked; recomputeSchedule(db.live); }
+    persist(); render();
+    return;
+  }
   if (el.dataset.action === 'toggle-available' || el.dataset.action === 'toggle-squad') {
     actions[el.dataset.action](el.dataset);
     return;

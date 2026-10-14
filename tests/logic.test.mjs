@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FORMATIONS, fitFor, migratePositions, recommendReplacement, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
+import { FORMATIONS, fitFor, migratePositions, recommendReplacement, adjustSchedule, positionWarnings, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
 
 const HALF = 25 * 60;
 
@@ -147,4 +147,33 @@ test('cambio no previsto: recomienda al del banquillo que encaja y menos ha juga
   assert.deepEqual(r.subs, [{ in: 'b3', out: 'ld', slotId: 'DEF3' }]);
   assert.deepEqual(r.options.map((o) => o.id), ['b3', 'b2', 'b1']);
   assert.equal(r.after.POR, 'gk');
+});
+
+test('cada X min con ajuste iguala minutos', () => {
+  const ALL = ['LI', 'DFC', 'LD', 'MED', 'DEL'];
+  const players = [{ id: 'gk', positions: ['POR'] }, ...Array.from({ length: 9 }, (_, i) => ({ id: 'p' + i, positions: ALL }))].map((p) => ({ ...p, played: 0 }));
+  const slots = FORMATIONS['3-2-1'].slots;
+  const lineup = optimizeLineup({ slots, players, gkCommitMin: 25 });
+  const base = { slots, players, lineup, phase: 'pre', halfLen: HALF, gkHalftimeOnly: true };
+  const fixed = intervalPoints(HALF, 300);
+  const adjusted = adjustSchedule(base, fixed);
+  const spread = (pts) => {
+    const r = planMatch({ ...base, points: pts });
+    const f = players.slice(1).map((p) => r.projected[p.id] / 60);
+    return Math.max(...f) - Math.min(...f);
+  };
+  assert.ok(spread(adjusted) < spread(fixed));
+  assert.ok(spread(adjusted) <= 1, 'dif ' + spread(adjusted));
+  adjusted.forEach((p, i) => assert.ok(Math.abs(p.t - fixed[i].t) <= 180));
+});
+
+test('aviso de posición con pocos jugadores', () => {
+  const slots = FORMATIONS['3-2-1'].slots;
+  const ps = [
+    { id: 'gk', name: 'GK', positions: ['POR'] }, { id: 'a', name: 'Ana', positions: ['LD'] },
+    ...Array.from({ length: 9 }, (_, i) => ({ id: 'x' + i, name: 'X' + i, positions: ['LI', 'DFC', 'MED', 'DEL'] })),
+  ];
+  const w = positionWarnings(slots, ps);
+  assert.equal(w.length, 1);
+  assert.deepEqual(w[0].names, ['Ana']);
 });

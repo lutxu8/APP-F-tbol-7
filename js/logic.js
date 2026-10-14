@@ -216,6 +216,54 @@ export function hysteresisFor(gapSec) {
   return clamp((gapSec / 60) * 0.4, 1, 4);
 }
 
+/** Puntuación de un plan: lo desiguales que quedan los minutos (varianza) y, un poco, cuántos cambios hay. */
+function scorePlan(plan) {
+  const vals = Object.values(plan.projected).map((x) => x / 60);
+  const mean = vals.reduce((a, b) => a + b, 0) / (vals.length || 1);
+  const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / (vals.length || 1);
+  const subs = plan.changes.reduce((a, c) => a + c.subs.length, 0);
+  const events = plan.changes.filter((c) => c.subs.length).length;
+  return variance + 0.03 * subs + 0.1 * events;
+}
+
+/**
+ * "Cada X minutos" con ajuste: mueve algunos cambios hasta `maxShiftSec` antes o
+ * después de su minuto para que los minutos queden iguales. Solo mueve los
+ * cambios que aún no han llegado; el descanso no se mueve.
+ * `base` son los mismos parámetros que planMatch (sin `points`).
+ */
+export function adjustSchedule(base, points, { maxShiftSec = 180, stepSec = 30, minGapSec = 90 } = {}) {
+  const handled = base.handled instanceof Set ? base.handled : new Set(base.handled || []);
+  const nowH = base.phase === 'h2' || base.phase === 'break' ? 2 : 1;
+  const nowT = base.phase === 'h1' || base.phase === 'h2' ? base.halfSec || 0 : 0;
+  const halfLen = base.halfLen;
+  const isHalftime = (p) => p.h === 2 && p.t === 0;
+  const isFuture = (p) => base.phase === 'pre' || p.h > nowH || (p.h === nowH && p.t > nowT + 30);
+  const cur = points.map((p) => ({ h: p.h, t: p.t, orig: p.t, movable: !isHalftime(p) && !handled.has(pointKey(p)) && isFuture(p) }));
+  const evalPts = (pts) => scorePlan(planMatch({ ...base, points: pts.map(({ h, t }) => ({ h, t })), handled }));
+  let best = evalPts(cur);
+  for (let round = 0; round < 4; round++) {
+    let improved = false;
+    for (let i = 0; i < cur.length; i++) {
+      const p = cur[i];
+      if (!p.movable) continue;
+      for (let d = -maxShiftSec; d <= maxShiftSec; d += stepSec) {
+        const t = p.orig + d;
+        if (t === p.t) continue;
+        if (t < minGapSec || t > halfLen - 60) continue;
+        if (p.h === nowH && base.phase !== 'pre' && t <= nowT + 30) continue;
+        if (cur.some((q, j) => j !== i && q.h === p.h && Math.abs(q.t - t) < minGapSec)) continue;
+        const old = p.t;
+        p.t = t;
+        const sc = evalPts(cur);
+        if (sc < best - 1e-6) { best = sc; improved = true; } else p.t = old;
+      }
+    }
+    if (!improved) break;
+  }
+  return cur.map(({ h, t }) => ({ h, t })).sort((a, b) => a.h - b.h || a.t - b.t);
+}
+
 /**
  * Modo automático: prueba varios calendarios de cambios y se queda con el que
  * deja los minutos más igualados (y, a igualdad, con menos cambios).
@@ -235,13 +283,7 @@ export function chooseSchedule(base, { minWindows = 3, maxWindows = 12 } = {}) {
         if (p.h < nowKey || (p.h === nowKey && p.t <= nowT)) handled.add(pointKey(p));
       }
     }
-    const plan = planMatch({ ...base, points, handled });
-    const vals = Object.values(plan.projected).map((x) => x / 60);
-    const mean = vals.reduce((a, b) => a + b, 0) / (vals.length || 1);
-    const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / (vals.length || 1);
-    const subs = plan.changes.reduce((a, c) => a + c.subs.length, 0);
-    const events = plan.changes.filter((c) => c.subs.length).length;
-    const score = variance + 0.03 * subs + 0.1 * events;
+    const score = scorePlan(planMatch({ ...base, points, handled }));
     if (!best || score < best.score - 1e-9) best = { score, windows: w, points, handledPast: [...handled] };
   }
   return best;
@@ -436,4 +478,34 @@ export function recommendReplacement({ slots, players, lineup, outId, lockGK = f
     .map((p) => ({ id: p.id, played: p.played, fit: fitFor(p.positions, slot) }))
     .sort((a, b) => rank[a.fit] - rank[b.fit] || a.played - b.played);
   return { slotId, after, ...diffLineups(lineup, after), options };
+}
+
+/**
+ * Avisos de posiciones justas: si para un puesto hay pocos convocados que lo
+ * sepan jugar, esos jugadores tendrán que jugar más que el resto.
+ * players: convocados disponibles [{ id, name, positions }].
+ * Devuelve [{ label, names, count, slots }].
+ */
+export function positionWarnings(slots, players, halfLenMin = 25) {
+  const field = players.filter((p) => (p.positions || []).some((r) => r !== 'POR'));
+  const fieldSlots = slots.filter((s) => s.role !== 'POR');
+  if (!field.length) return [];
+  const fair = (fieldSlots.length * halfLenMin * 2) / Math.max(field.length, fieldSlots.length);
+  const groups = new Map();
+  for (const s of fieldSlots) {
+    const accepts = s.accepts || [s.role];
+    const key = accepts.join('/');
+    if (!groups.has(key)) groups.set(key, { accepts, role: s.role, slots: 0 });
+    groups.get(key).slots += 1;
+  }
+  const out = [];
+  for (const g of groups.values()) {
+    const able = field.filter((p) => g.accepts.some((r) => (p.positions || []).includes(r)));
+    const needMin = g.slots * halfLenMin * 2;
+    if (able.length * fair < needMin - 0.5) {
+      const label = g.accepts.length > 1 ? `${ROLE_NAMES[g.role]} (${g.accepts.join(' o ')})` : ROLE_NAMES[g.role];
+      out.push({ label, names: able.map((p) => p.name), count: able.length, slots: g.slots });
+    }
+  }
+  return out;
 }
