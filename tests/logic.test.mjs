@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FORMATIONS, fitFor, migratePositions, recommendReplacement, adjustSchedule, positionWarnings, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
+import { FORMATIONS, planMatchRefined, fitFor, migratePositions, recommendReplacement, adjustSchedule, positionWarnings, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
 
 const HALF = 25 * 60;
 
@@ -204,4 +204,28 @@ test('no se quita a quien lleva menos de 5 min si se puede evitar', () => {
   players.slice(7).forEach((p) => { p.played = 300; p.stint = null; });
   const after = optimizeLineup({ slots, players, current: lineup, gapMin: 5, hysteresisMin: 1 });
   assert.ok(Object.values(after).includes('p0'), 'p0 sigue en el campo');
+});
+
+test('plantillas variadas de 10 de campo: plan afinado con diferencia pequeña', () => {
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const ROLES5 = ['LI', 'DFC', 'LD', 'MED', 'DEL'];
+  const spreads = [];
+  for (let r = 0; r < 10; r++) {
+    const players = [{ id: 'gk', positions: ['POR'], played: 0 }];
+    for (let i = 0; i < 10; i++) {
+      const pos = new Set();
+      const k = 1 + Math.floor(rnd() * 3);
+      while (pos.size < k) pos.add(ROLES5[Math.floor(rnd() * 5)]);
+      players.push({ id: 'p' + i, positions: [...pos], played: 0 });
+    }
+    const slots = FORMATIONS[r % 2 ? '2-3-1' : '3-2-1'].slots;
+    const lineup = optimizeLineup({ slots, players, gkCommitMin: 25 });
+    const base = { slots, players, lineup, phase: 'pre', halfLen: HALF, gkHalftimeOnly: true };
+    const plan = planMatchRefined({ ...base, points: chooseSchedule(base, { firstSec: 480 }).points });
+    const f = players.slice(1).map((p) => plan.projected[p.id] / 60);
+    spreads.push(Math.max(...f) - Math.min(...f));
+    assert.equal(plan.projected.gk, 50 * 60, 'el portero puro no sale de la portería');
+  }
+  assert.ok(Math.max(...spreads) <= 2.5, spreads.join(', '));
 });

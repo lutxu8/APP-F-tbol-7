@@ -1,5 +1,5 @@
 import {
-  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, planMatchBest, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, adjustSchedule, positionWarnings, seasonStats, diffLineups,
+  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, planMatchRefined, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, adjustSchedule, positionWarnings, seasonStats, diffLineups,
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
@@ -18,7 +18,8 @@ function mmss(sec) {
 }
 const mins = (sec) => `${Math.round(sec / 60)}'`;
 const today = () => new Date().toISOString().slice(0, 10);
-const persist = () => save(db);
+let dataVersion = 0;
+const persist = () => { dataVersion++; save(db); };
 const playerById = (id) => db.players.find((p) => p.id === id);
 const nameOf = (id) => playerById(id)?.name ?? '—';
 const numOf = (id) => playerById(id)?.number ?? '';
@@ -215,19 +216,30 @@ function recomputeSchedule(L) {
     if (L.freqAdjust !== false) L.points = adjustSchedule({ ...base, handled }, L.points);
   }
 }
+// El plan afinado es costoso: se guarda unos segundos y se rehace si cambia algo
+// o si llega el momento del siguiente cambio.
+let planCache = null;
 function computePlan() {
   const L = db.live;
   if (!L) return null;
-  let plan = planMatchBest({ ...planBase(L), points: L.points });
+  const now = Date.now();
+  if (planCache && planCache.live === L && planCache.ver === dataVersion && now - planCache.ts < 5000
+    && !(planCache.next && !planCache.next.due && secondsUntil(planCache.next, L) <= 0)) {
+    ui.plan = planCache.plan;
+    ui.next = planCache.next;
+    return ui.plan;
+  }
+  let plan = planMatchRefined({ ...planBase(L), points: L.points });
   // Un cambio pendiente que no cambia nada se da por hecho.
   let guard = 0;
   while (plan.changes[0]?.due && !plan.changes[0].subs.length && !plan.changes[0].moves.length && plan.changes[0].keys.length && guard++ < 5) {
     L.handled.push(...plan.changes[0].keys);
     persist();
-    plan = planMatchBest({ ...planBase(L), points: L.points });
+    plan = planMatchRefined({ ...planBase(L), points: L.points });
   }
   ui.plan = plan;
   ui.next = plan.changes.find((c) => c.subs.length || c.moves.length) || null;
+  planCache = { live: L, ver: dataVersion, ts: now, plan, next: ui.next };
   return plan;
 }
 function secondsUntil(change, L = db.live) {

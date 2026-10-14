@@ -116,7 +116,7 @@ export function hungarian(cost) {
  */
 export function optimizeLineup({
   slots, players, current = {}, lockGK = false, gapMin = 6, gkCommitMin = null, hysteresisMin = 2, movePenaltyMin = 0.5,
-  minStintMin = 5, stintPenaltyMin = 6, linePenaltyMin = 3, offPenaltyMin = 8,
+  minStintMin = 5, stintPenaltyMin = 6, linePenaltyMin = 1, offPenaltyMin = 2.5,
 }) {
   const slotOf = {};
   const ids = new Set(players.map((p) => p.id));
@@ -159,10 +159,14 @@ export function optimizeLineup({
         if (cs !== slot.id) v += 2 * g * (slot.role === 'POR' || roleOfSlot[cs] === 'POR' ? 3 : movePenaltyMin);
       }
       const fit = fitFor(r.positions, slot);
-      // Las posiciones ceden ante la igualdad de minutos: misma línea si evita ~3' de
-      // diferencia, otra línea si evita ~8'. La portería, solo porteros.
+      // Las posiciones ceden ante la igualdad de minutos: misma línea si evita ~1' de
+      // diferencia, otra línea si evita ~2,5'. La portería, solo porteros.
       if (fit === 'line') v += 2 * g * linePenaltyMin;
-      else if (fit === 'no') v += slot.role === 'POR' ? 3 * OUT : 2 * g * offPenaltyMin;
+      else if (fit === 'no') {
+        const onlyGK = (r.positions || []).length > 0 && r.positions.every((x) => x === 'POR');
+        // Un portero puro no juega de campo y la portería es solo para porteros.
+        v += slot.role === 'POR' || onlyGK ? 3 * OUT : 2 * g * offPenaltyMin;
+      }
       row[c] = v;
     }
     return row;
@@ -371,7 +375,8 @@ export function diffLineups(before, after) {
  * Devuelve { changes: [{key, keys, half, t, due, halftime, before, after, subs, moves}], projected: {id: segundos} }
  */
 export function planMatch({
-  slots, players, lineup, phase, halfSec = 0, halfLen, points: basePoints = [], handled = new Set(), gkHalftimeOnly = true, firstStep = {},
+  slots, players, lineup, phase, halfSec = 0, halfLen, points: basePoints = [], handled = new Set(), gkHalftimeOnly = true, firstStep = null,
+  stepVariants = {},
 }) {
   handled = handled instanceof Set ? handled : new Set(handled);
   const played = Object.fromEntries(players.map((p) => [p.id, p.played || 0]));
@@ -451,8 +456,9 @@ export function planMatch({
       gkCommitMin,
       // Margen para no cambiar por poco: proporcional al tramo que viene (al final del partido, menor).
       hysteresisMin: (point.halftime && !halftimeIsBoundary ? hysteresisMin * 3 : Math.min(hysteresisMin, hysteresisFor(gapMin * 60)))
-        * (i === 0 ? firstStep.hysteresisMul ?? 1 : 1),
-      ...(i === 0 ? firstStep.opts || {} : {}),
+        * ((i === 0 && firstStep ? firstStep : stepVariants[i])?.hysteresisMul ?? 1),
+      ...((i === 0 && firstStep ? firstStep : stepVariants[i])?.opts || {}),
+      ...((i === 0 && firstStep ? firstStep : stepVariants[i])?.gapMul ? { gapMin: gapMin * (i === 0 && firstStep ? firstStep : stepVariants[i]).gapMul } : {}),
     });
     const { subs, moves } = diffLineups(cur, after);
     let shortOuts = 0;
@@ -575,20 +581,48 @@ export function positionWarnings(slots, players, halfLenMin = 25) {
  * partido: prueba varias combinaciones y se queda con la que deja los minutos
  * finales más iguales (respetando lo de no quitar a quien lleva menos de 5').
  */
+const VARIANTS = [
+  { hysteresisMul: 0 }, { hysteresisMul: 0.5 }, { hysteresisMul: 2 }, { hysteresisMul: 4 },
+  { hysteresisMul: 0, opts: { linePenaltyMin: 1.5, offPenaltyMin: 5 } },
+  { hysteresisMul: 1, opts: { stintPenaltyMin: 12 } },
+  { hysteresisMul: 1, gapMul: 2 }, { hysteresisMul: 1, gapMul: 0.5 },
+];
+
 export function planMatchBest(params) {
   const base = planMatch(params);
   if (!base.changes[0]?.due) return base;
   let best = base;
   let bestScore = scorePlan(base);
-  const variants = [
-    { hysteresisMul: 0 }, { hysteresisMul: 0.5 }, { hysteresisMul: 2 }, { hysteresisMul: 4 },
-    { hysteresisMul: 0, opts: { linePenaltyMin: 1.5, offPenaltyMin: 5 } },
-    { hysteresisMul: 1, opts: { stintPenaltyMin: 12 } },
-  ];
-  for (const firstStep of variants) {
+  for (const firstStep of VARIANTS) {
     const plan = planMatch({ ...params, firstStep });
     const sc = scorePlan(plan);
     if (sc < bestScore - 1e-6) { best = plan; bestScore = sc; }
   }
   return best;
+}
+
+/**
+ * Plan completo afinado: remesa a remesa, prueba varias formas de decidir esa
+ * remesa (mirando cómo acaba el partido) y se queda con la mejor. Más lento que
+ * planMatch; se usa para el plan que se enseña y para decidir el cambio que toca.
+ */
+export function planMatchRefined(params, { rounds = 2 } = {}) {
+  let plan = planMatch(params);
+  let bestScore = scorePlan(plan);
+  const chosen = {};
+  for (let r = 0; r < rounds; r++) {
+    let improved = false;
+    for (let i = 0; i < plan.changes.length; i++) {
+      for (const v of VARIANTS) {
+        const trial = planMatch({ ...params, stepVariants: { ...chosen, [i]: v } });
+        // Una remesa que ya está sonando no puede convertirse en "no cambiar nada".
+        if (plan.changes[i].due && plan.changes[i].subs.length && !trial.changes[i].subs.length) continue;
+        const sc = scorePlan(trial);
+        if (sc < bestScore - 1e-6) { bestScore = sc; plan = trial; chosen[i] = v; improved = true; }
+      }
+    }
+    if (!improved) break;
+  }
+  plan.stepVariants = chosen;
+  return plan;
 }
