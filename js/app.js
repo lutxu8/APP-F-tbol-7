@@ -203,6 +203,9 @@ function planBase(L) {
 }
 function recomputeSchedule(L) {
   L.locked = null; // el próximo cambio se vuelve a anunciar con el plan nuevo
+  // En la previa no hay nada hecho ni omitido todavía: se empieza de cero
+  // (si no, un minuto descartado en una prueba anterior se saltaría después).
+  if (L.phase === 'pre') L.handled = [];
   const base = planBase(L);
   if (L.freq === 'auto') {
     const best = chooseSchedule(base, { firstSec: L.firstChange || null, current: L.phase === 'pre' ? null : L.points });
@@ -1234,6 +1237,9 @@ if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
 navigator.storage?.persist?.().catch(() => {});
+
+// Una previa guardada con una versión anterior se replanifica al abrir la app.
+if (db.live?.phase === 'pre') { recomputeSchedule(db.live); persist(); }
 
 render();
 syncWakeLock();
