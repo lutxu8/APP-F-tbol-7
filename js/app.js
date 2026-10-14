@@ -396,6 +396,9 @@ function render() {
   else if (ui.tab === 'squad') html = viewSquad();
   else if (ui.tab === 'stats') html = viewStats();
   else html = viewSettings();
+  if (alarmOn && ui.tab !== 'match') {
+    html = `<button class="alarm-bar" data-action="tab" data-tab="match">🔔 ¡Toca cambio! Toca aquí para ir al partido</button>` + html;
+  }
   $app.innerHTML = html;
   renderModal();
 }
@@ -600,7 +603,7 @@ function viewLive() {
   } else if (next) {
     const isDue = next.due && L.phase !== 'pre';
     const head = isDue
-      ? (L.phase === 'break' ? '🔁 Cambios para la 2ª parte' : '🔔 ¡Toca cambio!')
+      ? (L.phase === 'break' ? '🔁 Cambios para la 2ª parte' : '🔔 ¡Toca cambio! <span class="small muted">La alarma sonará hasta que pulses «Hacer cambios».</span>')
       : `Próximo cambio <span id="countdown">${L.phase === 'pre' ? '' : 'en ' + mmss(secondsUntil(next))}</span> <span class="muted small">(${whenText(L, next)})</span>`;
     banner = `<section class="card banner ${isDue ? 'due' : ''}">
       <div class="banner-head">${head}</div>
@@ -990,10 +993,7 @@ function tick() {
   if (next && !next.due) {
     const left = secondsUntil(next);
     if (cd) cd.textContent = 'en ' + mmss(left);
-    if (left <= 0 && L.running) {
-      render();
-      if (ui.next?.due && !ui.alerted.has(ui.next.key)) { ui.alerted.add(ui.next.key); beep(3); }
-    }
+    if (left <= 0 && L.running) render();
   }
   const halfKey = `end-${L.phase}`;
   if (halfSecNow(L) >= L.halfLen && !ui.alerted.has(halfKey)) {
@@ -1003,6 +1003,30 @@ function tick() {
   }
 }
 setInterval(tick, 500);
+
+// ---------- alarma de cambio ----------
+// Cuando toca un cambio, la alarma (sonido, vibración y pantalla parpadeando)
+// no para hasta pulsar «Hacer cambios» (u «Omitir»), aunque estés en otra pestaña.
+function alarmDue() {
+  const L = db.live;
+  if (!L || !(L.phase === 'h1' || L.phase === 'h2')) return false;
+  computePlan();
+  return Boolean(ui.next?.due);
+}
+let alarmOn = false;
+function alarmTick() {
+  const due = alarmDue();
+  if (due !== alarmOn) {
+    alarmOn = due;
+    document.body.classList.toggle('alarm', due);
+    render();
+  }
+  if (due) {
+    if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
+    beep(3);
+  }
+}
+setInterval(alarmTick, 1600);
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') { render(); syncWakeLock(); }
