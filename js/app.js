@@ -3,7 +3,7 @@ import {
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
-export const APP_VERSION = 16;
+export const APP_VERSION = 17;
 let db = load();
 const ui = { tab: 'match', sel: null, injured: false, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
 
@@ -959,10 +959,14 @@ function viewSettings() {
   <section class="card">
     <h2>Compartir y copia de seguridad</h2>
     <p class="muted small">Los datos se guardan solo en este teléfono. <b>Exportar</b> crea un archivo con la plantilla, los partidos y los ajustes que puedes enviar (WhatsApp, AirDrop, correo...) o guardar en Archivos.</p>
-    <p class="muted small">Para cargarlo en otro móvil: guarda el archivo en la app <b>Archivos</b>, abre esta app y pulsa <b>Importar</b>. Ojo: importar <b>sustituye</b> todos los datos de ese móvil por los del archivo.</p>
+    <p class="muted small">Para cargarlo en otro móvil: guarda el archivo (en iPhone, en la app <b>Archivos</b>; en Android queda en <b>Descargas</b>), abre esta app y pulsa <b>Importar archivo</b>. Si no aparece o no carga, usa <b>Copiar como texto</b> y <b>Pegar texto</b>. Ojo: importar <b>sustituye</b> todos los datos de ese móvil.</p>
     <div class="toolbar">
       <button class="btn" data-action="export">📤 Exportar / compartir</button>
-      <label class="btn">⬆️ Importar<input type="file" accept="application/json,.json" data-action="import" hidden></label>
+      <label class="btn">⬆️ Importar archivo<input type="file" data-action="import" hidden></label>
+    </div>
+    <div class="toolbar">
+      <button class="btn" data-action="copy-data">📋 Copiar como texto</button>
+      <button class="btn" data-action="paste-data">📥 Pegar texto</button>
     </div>
   </section>
   <section class="card">
@@ -973,6 +977,21 @@ function viewSettings() {
     <button class="btn danger-outline block" data-action="wipe">Borrar todos los datos</button>
     <p class="muted small center">Versión ${APP_VERSION}</p>
   </section>`;
+}
+
+// ---------- importar / exportar ----------
+function doImport(text, source) {
+  try {
+    const next = importJSON(db, text); // valida antes de preguntar
+    const msg = `Se sustituirán TODOS los datos de este móvil (plantilla, partidos y ajustes) por los de ${source}: ${next.players.length} jugadores y ${next.matches.length} partidos.${db.live ? ' El partido en curso se perderá.' : ''} ¿Seguir?`;
+    if (!confirm(msg)) return false;
+    db = next; persist(); ui.setupStep = 1; ui.modal = null; render();
+    alert(`Datos importados: ${db.players.length} jugadores y ${db.matches.length} partidos.`);
+    return true;
+  } catch (err) {
+    alert('No se pudo importar: ' + err.message);
+    return false;
+  }
 }
 
 // ---------- modales ----------
@@ -995,6 +1014,15 @@ function renderModal() {
         <span class="grow"></span>
         <button class="btn" data-action="close-modal">Cancelar</button>
         <button class="btn primary" data-action="save-player">Guardar</button>
+      </div>`;
+  } else if (m.type === 'paste') {
+    body = `<h2>Pegar datos</h2>
+      <p class="muted small">Pega aquí el texto que te han enviado (empieza por <code>{</code>). Mantén pulsado el cuadro y elige <b>Pegar</b>.</p>
+      <textarea id="paste-box" rows="8" placeholder='{"app":"futbol7-rotaciones", ...}'></textarea>
+      <div class="toolbar">
+        <span class="grow"></span>
+        <button class="btn" data-action="close-modal">Cancelar</button>
+        <button class="btn primary" data-action="paste-import">Importar</button>
       </div>`;
   } else if (m.type === 'match') {
     const match = db.matches.find((x) => x.id === m.id);
@@ -1121,6 +1149,20 @@ const actions = {
     ui.modal = null; persist(); render();
   },
   'close-modal': () => { ui.modal = null; renderModal(); },
+  'copy-data': async () => {
+    const text = exportJSON(db, { compact: true });
+    try {
+      await navigator.clipboard.writeText(text);
+      alert('Datos copiados. Pégalos en un mensaje (p. ej. de WhatsApp) para enviarlos. Quien los reciba debe copiar el mensaje entero y usar «Pegar texto».');
+    } catch (e) {
+      ui.modal = { type: 'paste' }; renderModal();
+      const box = document.getElementById('paste-box');
+      box.value = text; box.select();
+      alert('No se pudo copiar automáticamente: el texto está seleccionado en el cuadro, cópialo a mano.');
+    }
+  },
+  'paste-data': () => { ui.modal = { type: 'paste' }; renderModal(); setTimeout(() => document.getElementById('paste-box')?.focus(), 50); },
+  'paste-import': () => { doImport(document.getElementById('paste-box').value, 'el texto pegado'); },
   'close-modal-bg': (d, el, e) => { if (e.target === el) { ui.modal = null; renderModal(); } },
   // Estadísticas
   'show-match': (d) => { ui.modal = { type: 'match', id: d.id }; renderModal(); },
@@ -1180,14 +1222,7 @@ document.addEventListener('change', (e) => {
     const file = el.files?.[0];
     el.value = ''; // permite volver a elegir el mismo archivo
     if (!file) return;
-    file.text().then((text) => {
-      try {
-        const msg = `Se sustituirán TODOS los datos de este móvil (plantilla, partidos y ajustes) por los del archivo «${file.name}».${db.live ? ' El partido en curso se perderá.' : ''} ¿Seguir?`;
-        if (!confirm(msg)) return;
-        db = importJSON(db, text); persist(); ui.setupStep = 1; render();
-        alert('Datos importados.');
-      } catch (err) { alert('No se pudo importar: ' + err.message); }
-    });
+    file.text().then((text) => doImport(text, `el archivo «${file.name}»`)).catch(() => alert('No se pudo leer el archivo.'));
     return;
   }
   if (el.dataset.bind) bind(el, true);
