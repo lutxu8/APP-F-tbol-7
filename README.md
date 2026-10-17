@@ -18,7 +18,7 @@ No necesita servidor ni cuentas: los datos se guardan en el propio teléfono y f
   - También puedes tocar un jugador y después otro (del campo o del banquillo) para intercambiarlos.
   - Alguien que llega tarde o se va: márcalo como *No disponible* / *Disponible* en la tabla de minutos.
   - Marcador, **Deshacer**, y la pantalla se mantiene encendida.
-- **Estadísticas**: convocatorias, partidos jugados, minutos totales y media por jugador, e historial de partidos.
+- **Estadísticas**: convocatorias, partidos jugados, minutos totales y media por jugador, e historial de partidos. En cada partido, el **registro de cambios**: configuración usada, once inicial y cada cambio con su minuto y puesto (avisa si alguien jugó fuera de su posición).
 - **Compartir y copia de seguridad**: *Ajustes → Exportar / compartir* abre el menú de compartir del iPhone (WhatsApp, AirDrop, Correo, Guardar en Archivos…) con un archivo `.json` con la plantilla, los partidos y los ajustes. Quien lo recibe lo guarda (iPhone: app **Archivos**; Android: queda en **Descargas**) y, en su app, pulsa *Ajustes → Importar archivo*. Alternativa sin archivos: *Copiar como texto*, enviarlo en un mensaje y, en el otro móvil, copiar el mensaje y usar *Pegar texto*. Importar **sustituye** todos los datos de ese móvil.
 
 ### Cómo decide los cambios

@@ -3,7 +3,7 @@ import {
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
-export const APP_VERSION = 17;
+export const APP_VERSION = 18;
 let db = load();
 const ui = { tab: 'match', sel: null, injured: false, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
 
@@ -351,6 +351,8 @@ function startHalf(h) {
     L.elapsed = 0;
     L.halfStart[1] = 0;
     for (const pid of Object.values(L.lineup)) if (pid) L.enteredAt[pid] = 0;
+    L.startLineup = { ...L.lineup };
+    L.settingsUsed = { firstChange: L.freq === 'auto' ? L.firstChange || null : null, freq: L.freq, maxBench: Number(db.settings.maxBench) || null };
   } else {
     L.phase = 'h2';
     L.halfStart[2] = L.elapsed;
@@ -412,6 +414,8 @@ function saveMatchToHistory(L) {
     goalsAgainst: L.goalsAgainst,
     players: L.squad.map((id) => ({ id, name: nameOf(id), seconds: Math.round(L.acc[id] || 0) })),
     log: L.log,
+    startLineup: L.startLineup || null,
+    settingsUsed: L.settingsUsed || null,
   };
   db.matches = [...db.matches.filter((m) => m.id !== record.id), record];
 }
@@ -994,6 +998,33 @@ function doImport(text, source) {
   }
 }
 
+/** Registro de un partido: once inicial y cada cambio con su minuto y puesto. */
+function matchLogHtml(match) {
+  const log = match.log || [];
+  if (!log.length && !match.startLineup) return '';
+  const slots = slotsOf(match.formation);
+  const nm = (id) => esc(playerById(id)?.name ?? match.players.find((r) => r.id === id)?.name ?? '—');
+  const lbl = (sid) => slots.find((x) => x.id === sid)?.label ?? sid;
+  const posNote = (id, sid) => {
+    const p = playerById(id); const slot = slots.find((x) => x.id === sid);
+    if (!p || !slot) return '';
+    const fit = fitFor(p.positions, slot);
+    return fit === 'yes' ? '' : ` <span class="warn small">(${fit === 'line' ? 'otra posición de su línea' : 'fuera de su posición'}: es ${(p.positions || []).join('/')})</span>`;
+  };
+  const when = (e) => `${e.half === 1 ? '1ª' : '2ª'} ${mmss(e.t)}`;
+  const cfg = match.settingsUsed;
+  const cfgTxt = cfg ? `<p class="muted small">Configuración: ${cfg.freq === 'auto' ? `automático${cfg.firstChange ? `, 1ª remesa en el min ${fmtMin(cfg.firstChange)}` : ''}` : `cada ${fmtMin(Number(cfg.freq))} min`}${cfg.maxBench ? ` · máx. ${cfg.maxBench} min en el banquillo` : ''}.</p>` : '';
+  const start = match.startLineup
+    ? `<p class="small"><b>Once inicial:</b> ${slots.map((sl) => match.startLineup[sl.id] ? `${lbl(sl.id)} ${nm(match.startLineup[sl.id])}${posNote(match.startLineup[sl.id], sl.id)}` : '').filter(Boolean).join(' · ')}</p>`
+    : '';
+  const rows = log.map((e) => {
+    if (e.move) return `<li class="muted">${when(e)} · ↔ ${nm(e.move)}: ${lbl(e.from)} → ${lbl(e.to)}${posNote(e.move, e.to)}</li>`;
+    const tag = e.injured ? ' <span class="small">(lesión)</span>' : e.manual ? ' <span class="small">(a mano)</span>' : '';
+    return `<li>${when(e)} · ${e.in ? `<span class="in">⬆ ${nm(e.in)}</span> (${lbl(e.slot)})${posNote(e.in, e.slot)}` : ''} ${e.out ? `<span class="out">⬇ ${nm(e.out)}</span>` : ''}${tag}</li>`;
+  }).join('');
+  return `<details class="match-log"><summary><b>Registro de cambios</b></summary>${cfgTxt}${start}<ul class="changes">${rows}</ul></details>`;
+}
+
 // ---------- modales ----------
 function renderModal() {
   const m = ui.modal;
@@ -1031,6 +1062,7 @@ function renderModal() {
     body = `<h2>${esc(match.rival || 'Rival')} <span class="muted">${match.goalsFor ?? 0} – ${match.goalsAgainst ?? 0}</span></h2>
       <p class="muted">${fmtDate(match.date)} · ${FORMATIONS[match.formation]?.name ?? ''}</p>
       <table class="table"><thead><tr><th>Jugador</th><th>Minutos</th></tr></thead><tbody>${rows}</tbody></table>
+      ${matchLogHtml(match)}
       <div class="toolbar">
         <button class="btn danger-outline" data-action="delete-match" data-id="${match.id}">Eliminar partido</button>
         <span class="grow"></span>
