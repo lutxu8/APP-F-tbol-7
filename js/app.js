@@ -1,9 +1,9 @@
 import {
-  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, planMatchRefined, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, adjustSchedule, positionWarnings, chooseScheduleWithRules, lineWarnings, seasonStats, diffLineups, LEVELS, LEVEL_NAMES, levelOf,
+  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, planMatchRefined, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, adjustSchedule, positionWarnings, chooseScheduleWithRules, lineWarnings, seasonStats, diffLineups, LEVELS, LEVEL_NAMES, levelOf, withBackupGK, isBackupGK,
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
-export const APP_VERSION = 21;
+export const APP_VERSION = 22;
 let db = load();
 const ui = { tab: 'match', sel: null, injured: false, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
 
@@ -37,13 +37,14 @@ function sortPlayers(list) {
 function seasonOf() {
   return seasonStats(db.players, db.matches);
 }
-function posChips(positions, levels) {
+function posChips(positions, levels, backupGK) {
   // En orden de preferencia; si hay más de una, numeradas. Las que juega "Bien" o
   // "Cumple" llevan una marca (· o ··) y se ven más apagadas.
   const pos = (positions || []).filter((r) => ROLES.includes(r));
   return pos.map((r, i) => {
     const lv = levelOf(levels, r);
-    return `<span class="chip chip-${ROLE_LINE[r]} lv${lv}" title="${i + 1}ª: ${ROLE_NAMES[r]} · ${LEVEL_NAMES[lv]}">${pos.length > 1 ? `<small>${i + 1}</small> ` : ''}${r}${lv ? `<small>${lv === 1 ? ' ·' : ' ··'}</small>` : ''}</span>`;
+    const sup = backupGK && r === 'POR' && pos.some((x) => x !== 'POR');
+    return `<span class="chip chip-${ROLE_LINE[r]} lv${lv}" title="${i + 1}ª: ${ROLE_NAMES[r]} · ${sup ? 'solo si no hay otro portero' : LEVEL_NAMES[lv]}">${pos.length > 1 ? `<small>${i + 1}</small> ` : ''}${r}${sup ? '<small> sup.</small>' : ''}${lv ? `<small>${lv === 1 ? ' ·' : ' ··'}</small>` : ''}</span>`;
   }).join('');
 }
 
@@ -183,8 +184,9 @@ function playedNow(L, pid) {
   if (L.enteredAt[pid] != null && onField(L, pid)) return base + (clockNow(L) - L.enteredAt[pid]);
   return base;
 }
-function availablePlayers(L) {
-  return L.squad
+// leavingId: quien va a salir en un cambio no previsto (si es el portero, el suplente puede entrar a la portería).
+function availablePlayers(L, leavingId = null) {
+  return withBackupGK(L.squad
     .filter((id) => !L.unavailable.includes(id) && playerById(id))
     .map((id) => ({
       id,
@@ -195,7 +197,8 @@ function availablePlayers(L) {
       stint: L.phase !== 'pre' && onField(L, id) && L.enteredAt[id] != null ? clockNow(L) - L.enteredAt[id] : null,
       // Tiempo seguido en el banquillo (desde que salió, o desde el inicio si aún no ha jugado).
       benched: L.phase !== 'pre' && !onField(L, id) ? clockNow(L) - ((L.leftAt || {})[id] ?? 0) : null,
-    }));
+      backupGK: playerById(id).backupGK,
+    })), leavingId);
 }
 function planBase(L) {
   return {
@@ -344,7 +347,7 @@ function startMatchFromSetup() {
   };
   L.lineup = optimizeLineup({
     slots: slotsOf(L.formation),
-    players: squad.map((id, i) => ({ id, positions: playerById(id).positions || [], levels: playerById(id).levels, played: 0, tie: i })),
+    players: withBackupGK(squad.map((id, i) => ({ id, positions: playerById(id).positions || [], levels: playerById(id).levels, backupGK: playerById(id).backupGK, played: 0, tie: i }))),
     gkCommitMin: halfLen / 60,
   });
   recomputeSchedule(L);
@@ -598,7 +601,7 @@ function viewSetup() {
       return `<label class="row check ${on ? 'on' : ''}">
         <input type="checkbox" data-action="toggle-available" data-id="${p.id}" ${on ? 'checked' : ''}>
         <span class="num">${esc(p.number)}</span>
-        <span class="grow"><b>${esc(p.name)}</b><br>${posChips(p.positions, p.levels)}</span>
+        <span class="grow"><b>${esc(p.name)}</b><br>${posChips(p.positions, p.levels, p.backupGK)}</span>
         <span class="muted small">${mins(st[p.id]?.seconds || 0)} · ${st[p.id]?.played || 0} PJ</span>
       </label>`;
     }).join('');
@@ -626,7 +629,7 @@ function viewSetup() {
       return `<label class="row check ${on ? 'on' : 'off'}">
         <input type="checkbox" data-action="toggle-squad" data-id="${p.id}" ${on ? 'checked' : ''}>
         <span class="num">${esc(p.number)}</span>
-        <span class="grow"><b>${esc(p.name)}</b><br>${posChips(p.positions, p.levels)}</span>
+        <span class="grow"><b>${esc(p.name)}</b><br>${posChips(p.positions, p.levels, p.backupGK)}</span>
         <span class="muted small">${mins(st[p.id]?.seconds || 0)} · ${st[p.id]?.played || 0} PJ</span>
       </label>`;
     }).join('');
@@ -635,7 +638,7 @@ function viewSetup() {
   if (S.squad.length > max) warnings.push(`Has convocado a ${S.squad.length} y el máximo es ${max}.`);
   if (S.squad.length < 7) warnings.push(`Solo hay ${S.squad.length} convocados: hacen falta 7.`);
   if (!squadPlayers.some((p) => (p.positions || []).includes('POR'))) warnings.push('No hay ningún portero en la convocatoria.');
-  warnings.push(...positionWarningTexts(S.formation, squadPlayers));
+  warnings.push(...positionWarningTexts(S.formation, withBackupGK(squadPlayers)));
   const formOpts = Object.entries(FORMATIONS).map(([k, f]) => `<button class="seg ${S.formation === k ? 'on' : ''}" data-action="set-formation" data-f="${k}">${f.name}</button>`).join('');
   return `<section class="card">
     <h2>Nuevo partido · 2/2</h2>
@@ -733,7 +736,7 @@ function setFreq(scope, value) {
 function viewSubSheet(L) {
   const outId = L.lineup[ui.sel.id];
   const rec = recommendReplacement({
-    slots: slotsOf(L.formation), players: availablePlayers(L), lineup: L.lineup, outId, lockGK: L.gkHalftimeOnly && L.phase !== 'break',
+    slots: slotsOf(L.formation), players: availablePlayers(L, outId), lineup: L.lineup, outId, lockGK: L.gkHalftimeOnly && L.phase !== 'break',
   });
   if (!rec) return '';
   const fitTxt = { yes: '', line: ' <span class="warn small">(misma línea)</span>', no: ' <span class="warn small">(fuera de posición)</span>' };
@@ -866,7 +869,7 @@ function viewLive() {
           <span class="shirt">${esc(pl.number || '·')}</span>
           <span class="pname">${esc(pl.name)}</span>
           <span class="ptime" data-played="${p.id}">${mmss(p.played)}</span>
-          <span class="tiny">${posChips(pl.positions, pl.levels)}</span>
+          <span class="tiny">${posChips(pl.positions, pl.levels, pl.backupGK)}</span>
         </button>`;
       }).join('') : '<p class="muted">Nadie en el banquillo.</p>'}</div>
   </section>`;
@@ -905,7 +908,7 @@ function viewLive() {
     ${L.phase !== 'end' ? '<button class="btn danger-outline" data-action="discard-match">Descartar partido</button>' : ''}
   </section>`;
 
-  const posWarn = L.phase === 'pre' ? positionWarningTexts(L.formation, availablePlayers(L).map((p) => playerById(p.id))) : [];
+  const posWarn = L.phase === 'pre' ? positionWarningTexts(L.formation, withBackupGK(availablePlayers(L).map((p) => playerById(p.id)))) : [];
   const freqCard = L.phase === 'pre' ? `<section class="card">${posWarn.map((w) => `<p class="warn">⚠️ ${w}</p>`).join('')}<h3>Cambios</h3>${freqControl('live', L.freq, L.halfLen, L.freqAdjust !== false, L.points, L.firstChange ?? null)}${rulesText(L)}</section>` : '';
   const showSheet = ui.sel?.kind === 'slot' && L.lineup[ui.sel.id] && ['h1', 'h2', 'break'].includes(L.phase);
   const sheet = showSheet ? viewSubSheet(L) : '';
@@ -959,7 +962,7 @@ function viewSquad() {
   const st = seasonOf();
   const list = sortPlayers(db.players).map((p) => `<button class="row" data-action="edit-player" data-id="${p.id}">
       <span class="num">${esc(p.number)}</span>
-      <span class="grow"><b>${esc(p.name)}</b>${p.active === false ? ' <span class="muted small">(baja)</span>' : ''}<br>${posChips(p.positions, p.levels)}</span>
+      <span class="grow"><b>${esc(p.name)}</b>${p.active === false ? ' <span class="muted small">(baja)</span>' : ''}<br>${posChips(p.positions, p.levels, p.backupGK)}</span>
       <span class="muted small">${mins(st[p.id]?.seconds || 0)}<br>${st[p.id]?.played || 0} PJ</span>
     </button>`).join('');
   return `<section class="card">
@@ -1101,6 +1104,7 @@ function renderModal() {
       </li>`).join('') : '<li class="muted small">Toca las posiciones de abajo en orden: la primera que toques será su posición preferida.</li>'}</ol>
       ${p.positions.length > 1 ? '<p class="muted small">El nivel manda más que el orden: el orden solo desempata entre posiciones del mismo nivel. Si todas están en <b>Muy bien</b>, decide el orden. Que todos jueguen lo mismo sigue siendo lo primero.</p>' : ''}
       <div class="pos-picker">${ROLES.filter((r) => !p.positions.includes(r)).map((r) => `<button class="pos chip-${ROLE_LINE[r]}" data-action="toggle-pos" data-role="${r}">+ ${r}<small>${ROLE_NAMES[r]}</small></button>`).join('')}</div>
+      ${p.positions.includes('POR') && p.positions.some((r) => r !== 'POR') ? `<label class="switch"><input type="checkbox" data-bind="modal.player.backupGK" ${p.backupGK ? 'checked' : ''}> Portero suplente: solo juega de portero si no hay otro portero en el partido</label>` : ''}
       <label class="switch"><input type="checkbox" data-bind="modal.player.active" ${p.active !== false ? 'checked' : ''}> Disponible por defecto (en plantilla activa)</label>
       <div class="toolbar">
         ${m.isNew ? '' : '<button class="btn danger-outline" data-action="delete-player">Eliminar</button>'}
@@ -1152,7 +1156,7 @@ const actions = {
   'setup-next': () => {
     const S = db.setup;
     const st = seasonOf();
-    const avail = S.available.map(playerById).filter(Boolean).map((p) => ({ id: p.id, name: p.name, positions: p.positions, seasonSeconds: st[p.id]?.seconds || 0, matches: st[p.id]?.played || 0 }));
+    const avail = S.available.map(playerById).filter(Boolean).map((p) => ({ id: p.id, name: p.name, positions: p.positions, backupGK: p.backupGK, seasonSeconds: st[p.id]?.seconds || 0, matches: st[p.id]?.played || 0 }));
     S.squad = proposeSquad(avail, db.settings.maxSquad);
     ui.setupStep = 2; persist(); render(); window.scrollTo(0, 0);
   },
@@ -1197,7 +1201,7 @@ const actions = {
     const L = db.live;
     const outId = L.lineup[ui.sel.id];
     const rec = recommendReplacement({
-      slots: slotsOf(L.formation), players: availablePlayers(L), lineup: L.lineup, outId, lockGK: L.gkHalftimeOnly && L.phase !== 'break',
+      slots: slotsOf(L.formation), players: availablePlayers(L, outId), lineup: L.lineup, outId, lockGK: L.gkHalftimeOnly && L.phase !== 'break',
     });
     if (rec) applyLineup(rec.after, [], { injuredId: ui.injured ? outId : null, manual: true });
   },
@@ -1251,6 +1255,7 @@ const actions = {
     // Solo se guardan los niveles de sus posiciones que no son "Muy bien".
     const levels = Object.fromEntries(p.positions.filter((r) => levelOf(p.levels, r) > 0).map((r) => [r, levelOf(p.levels, r)]));
     if (Object.keys(levels).length) p.levels = levels; else delete p.levels;
+    if (!p.backupGK || !isBackupGK(p)) delete p.backupGK;
     const i = db.players.findIndex((x) => x.id === p.id);
     if (i >= 0) db.players[i] = p; else db.players.push(p);
     if (ui.modal.isNew && db.setup && !db.setup.available.includes(p.id) && p.active !== false) db.setup.available.push(p.id);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FORMATIONS, planMatchRefined, fitFor, rankFor, positionCost, levelOf, lineWarnings, chooseScheduleWithRules, migratePositions, recommendReplacement, adjustSchedule, positionWarnings, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
+import { FORMATIONS, planMatchRefined, fitFor, rankFor, positionCost, levelOf, withBackupGK, isBackupGK, lineWarnings, chooseScheduleWithRules, migratePositions, recommendReplacement, adjustSchedule, positionWarnings, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
 
 const HALF = 25 * 60;
 
@@ -358,4 +358,34 @@ test('niveles: la igualdad de minutos sigue siendo lo primero (convocatoria real
       if (id) assert.notEqual(fitFor(real[id], s), 'no', `${id} en ${s.id}`);
     }
   }
+});
+
+test('portero suplente: solo de portero si no hay otro portero', () => {
+  const slots = FORMATIONS['3-2-1'].slots;
+  const field = [['a', ['LI']], ['b', ['DFC']], ['c', ['LD']], ['d', ['MED']], ['e', ['MED']], ['f', ['DEL']], ['g', ['MED', 'DEL']]];
+  const sup = { id: 'sup', positions: ['DFC', 'POR'], backupGK: true };
+  const titular = { id: 'tit', positions: ['POR'] };
+  const base = field.map(([id, positions]) => ({ id, positions }));
+  assert.ok(isBackupGK(sup));
+  // Con el titular, el suplente no cuenta como portero
+  const con = withBackupGK([titular, sup, ...base]);
+  assert.deepEqual(con.find((p) => p.id === 'sup').positions, ['DFC']);
+  // Sin el titular, sí
+  assert.deepEqual(withBackupGK([sup, ...base]).find((p) => p.id === 'sup').positions, ['DFC', 'POR']);
+  // Si el titular es quien sale (lesión), el suplente vuelve a ser portero
+  assert.deepEqual(withBackupGK([titular, sup, ...base], 'tit').find((p) => p.id === 'sup').positions, ['DFC', 'POR']);
+  // En todo el partido con el titular, el suplente nunca va a la portería
+  const players = con.map((p) => ({ ...p, played: 0 }));
+  const lineup = optimizeLineup({ slots, players, gkCommitMin: 25 });
+  const r = chooseScheduleWithRules({ slots, players, lineup, phase: 'pre', halfLen: HALF, gkHalftimeOnly: true, mustChange: ['1-480'] }, { firstSec: 480 });
+  const plan = planMatchRefined({ slots, players, lineup, phase: 'pre', halfLen: HALF, gkHalftimeOnly: true, mustChange: ['1-480'], minStintMin: r.rules.minStintMin, maxBenchMin: r.rules.maxBenchMin, points: r.points, handled: new Set(r.handledPast) });
+  assert.equal(lineup.POR, 'tit');
+  for (const c of plan.changes) assert.equal(c.after.POR, 'tit');
+  // Recomendación: si se lesiona el titular, entra el suplente a la portería
+  const lu = { ...lineup };
+  const rec = recommendReplacement({ slots, players: withBackupGK([titular, sup, ...base], 'tit').map((p) => ({ ...p, played: 0 })), lineup: lu, outId: 'tit' });
+  assert.equal(rec.after.POR, 'sup');
+  // Convocatoria: si sobra gente, se lleva al titular aunque tenga más minutos
+  const avail = [{ ...titular, seasonSeconds: 9999 }, { ...sup, seasonSeconds: 0 }, ...base.map((p) => ({ ...p, seasonSeconds: 10 }))];
+  assert.ok(proposeSquad(avail, 7).includes('tit'));
 });

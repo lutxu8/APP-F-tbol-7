@@ -648,10 +648,27 @@ export function planMatch({
 }
 
 /**
+ * Portero suplente: un jugador de campo que solo juega de portero si no hay
+ * ningún otro portero disponible. Si lo hay, se le quita la portería de sus
+ * posiciones para este partido (o para este momento del partido: si el
+ * portero titular se lesiona o se va, el suplente vuelve a contar como portero).
+ */
+export function isBackupGK(p) {
+  const pos = p.positions || [];
+  return !!p.backupGK && pos.includes('POR') && pos.some((r) => r !== 'POR');
+}
+export function withBackupGK(players, leavingId = null) {
+  // leavingId: el portero que va a salir (cambio no previsto); no cuenta como disponible.
+  const hasMain = players.some((p) => p.id !== leavingId && (p.positions || []).includes('POR') && !isBackupGK(p));
+  if (!hasMain) return players;
+  return players.map((p) => (isBackupGK(p) ? { ...p, positions: p.positions.filter((r) => r !== 'POR') } : p));
+}
+
+/**
  * Propone la convocatoria cuando hay más disponibles que plazas:
  * prioridad a quien menos minutos lleva en la temporada (después, menos partidos).
- * Garantiza al menos un portero si hay alguno disponible.
- * available: [{ id, name, positions, seasonSeconds, matches }]
+ * Garantiza al menos un portero si hay alguno disponible (si es posible, no el suplente).
+ * available: [{ id, name, positions, backupGK?, seasonSeconds, matches }]
  */
 export function proposeSquad(available, maxSquad) {
   const sorted = [...available].sort(
@@ -659,7 +676,9 @@ export function proposeSquad(available, maxSquad) {
   );
   const chosen = sorted.slice(0, maxSquad);
   const rest = sorted.slice(maxSquad);
-  const isGK = (p) => (p.positions || []).includes('POR');
+  // Primero un portero de verdad; el suplente solo si no hay ninguno.
+  const isMainGK = (p) => (p.positions || []).includes('POR') && !isBackupGK(p);
+  const isGK = rest.some(isMainGK) || chosen.some(isMainGK) ? isMainGK : (p) => (p.positions || []).includes('POR');
   if (!chosen.some(isGK)) {
     const gk = rest.find(isGK);
     if (gk) {
