@@ -60,16 +60,46 @@ export function rankFor(positions, slot) {
   return best;
 }
 
+// Nivel de un jugador en cada posición: 0 = Muy bien, 1 = Bien, 2 = Cumple.
+export const LEVELS = [0, 1, 2];
+export const LEVEL_NAMES = ['Muy bien', 'Bien', 'Cumple'];
+const LEVEL_BASE = [0, 0.4, 0.75]; // coste base de cada nivel (minutos equivalentes)
+const LEVEL_CAP = [0.3, 0.65, 0.95]; // cada nivel por debajo del siguiente y "Cumple" por debajo de "misma línea" (1)
+
+/** Nivel del jugador en esa posición (sin marcar = Muy bien). */
+export function levelOf(levels, role) {
+  const v = Number(levels?.[role]);
+  return LEVELS.includes(v) ? v : 0;
+}
+
+/** ¿Tiene algún nivel distinto de "Muy bien" en sus posiciones? */
+export function hasLevels(positions, levels) {
+  return (positions || []).some((r) => levelOf(levels, r) > 0);
+}
+
 /**
  * "Coste" de que un jugador ocupe un puesto, en minutos equivalentes de
- * diferencia que la app aceptaría para evitarlo: 1ª posición 0, cada posición
- * más abajo en su lista un poco más (máx. 0,75), misma línea sin marcar 1,
- * otra línea 2,5. Igualar minutos sigue siendo lo primero.
+ * diferencia que la app aceptaría para evitarlo. Igualar minutos sigue siendo lo primero.
+ * - Sin niveles (todas "Muy bien"): 1ª posición 0, cada posición más abajo en su
+ *   lista un poco más (máx. 0,75).
+ * - Con niveles: manda el nivel (Muy bien 0, Bien 0,4, Cumple 0,75) y, dentro del
+ *   mismo nivel, desempata el orden de su lista (+0,1 por puesto).
+ * - Posición sin marcar: misma línea 1, otra línea 2,5.
  */
-export function positionCost(positions, slot, { rankStepMin = 0.25, linePenaltyMin = 1, offPenaltyMin = 2.5 } = {}) {
+export function positionCost(positions, slot, { rankStepMin = 0.25, linePenaltyMin = 1, offPenaltyMin = 2.5 } = {}, levels = null) {
   const rank = rankFor(positions, slot);
-  if (rank >= 0) return Math.min(rankStepMin * rank, 0.75);
-  return fitFor(positions, slot) === 'line' ? linePenaltyMin : offPenaltyMin;
+  if (rank < 0) return fitFor(positions, slot) === 'line' ? linePenaltyMin : offPenaltyMin;
+  if (!hasLevels(positions, levels)) return Math.min(rankStepMin * rank, 0.75);
+  // Posición concreta que usa (en el 1-2-3-1 un DFC puede cubrirlo un lateral): la mejor de las que acepta.
+  const pos = slot.role === 'POR' ? positions || [] : (positions || []).filter((r) => r !== 'POR');
+  let best = Infinity;
+  for (const r of slot.accepts || [slot.role]) {
+    if (!pos.includes(r)) continue;
+    const lv = levelOf(levels, r);
+    const within = pos.filter((x) => levelOf(levels, x) === lv).indexOf(r);
+    best = Math.min(best, Math.min(LEVEL_BASE[lv] + 0.1 * within, LEVEL_CAP[lv]));
+  }
+  return best;
 }
 
 const FIELD_LINES = ['DEF', 'MED', 'DEL'];
@@ -241,7 +271,7 @@ export function optimizeLineup({
       const fit = fitFor(r.positions, slot);
       const onlyGK = (r.positions || []).length > 0 && r.positions.every((x) => x === 'POR');
       if (fit === 'no' && (slot.role === 'POR' || onlyGK)) v += 3 * OUT;
-      else v += 2 * g * positionCost(r.positions, slot, { rankStepMin, linePenaltyMin, offPenaltyMin });
+      else v += 2 * g * positionCost(r.positions, slot, { rankStepMin, linePenaltyMin, offPenaltyMin }, r.levels);
       // Reservar a los polivalentes: si este jugador sirve para una línea que va
       // más justa que la de este puesto, cuesta un poco usarlo aquí.
       if (scarcity && reserveMin && slot.role !== 'POR') {
@@ -516,7 +546,7 @@ export function planMatch({
         const pid = lu[sl.id];
         if (!pid || sl.role === 'POR') continue;
         const pl = players.find((x) => x.id === pid);
-        if (pl) posCost += dt * positionCost(pl.positions, sl);
+        if (pl) posCost += dt * positionCost(pl.positions, sl, undefined, pl.levels);
       }
     }
     posFrom = Math.max(posFrom, toNominal);
@@ -560,6 +590,7 @@ export function planMatch({
       players: players.map((p, j) => ({
         id: p.id,
         positions: p.positions,
+        levels: p.levels,
         played: played[p.id] + (point.h === 1 && !point.halftime ? virtual[p.id] || 0 : 0),
         stint: stintStart[p.id] != null ? nominal(point) - stintStart[p.id] : null,
         benched: benchStart[p.id] != null ? nominal(point) - benchStart[p.id] : null,
@@ -584,7 +615,7 @@ export function planMatch({
       const again = optimizeLineup({
         slots,
         players: players.map((p, j) => ({
-          id: p.id, positions: p.positions, played: played[p.id], stint: null, tie: j,
+          id: p.id, positions: p.positions, levels: p.levels, played: played[p.id], stint: null, tie: j,
         })),
         current: cur, lockGK, gapMin, gkCommitMin, hysteresisMin: 0, stintPenaltyMin: 0,
       });

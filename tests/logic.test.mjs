@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FORMATIONS, planMatchRefined, fitFor, rankFor, positionCost, lineWarnings, chooseScheduleWithRules, migratePositions, recommendReplacement, adjustSchedule, positionWarnings, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
+import { FORMATIONS, planMatchRefined, fitFor, rankFor, positionCost, levelOf, lineWarnings, chooseScheduleWithRules, migratePositions, recommendReplacement, adjustSchedule, positionWarnings, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
 
 const HALF = 25 * 60;
 
@@ -309,4 +309,53 @@ test('reglas de tiempo seguido: se aplican si dejan jugar a todos lo mismo y si 
   assert.deepEqual(r.rules, { minStintMin: 7, maxBenchMin: 8 });
   assert.equal(r.relaxed, false);
   assert.ok(r.spread <= 2);
+});
+
+test('niveles por posición: Muy bien / Bien / Cumple', () => {
+  const slots = FORMATIONS['3-2-1'].slots;
+  const [, li, dfc, ld, med] = slots;
+  assert.equal(levelOf({ LD: 2 }, 'LD'), 2);
+  assert.equal(levelOf({ LD: 2 }, 'MED'), 0, 'sin marcar = Muy bien');
+  // Sin niveles, igual que antes (cuenta el orden)
+  assert.equal(positionCost(['DEL', 'MED', 'LD'], ld), 0.5);
+  assert.equal(positionCost(['DEL', 'MED', 'LD'], ld, undefined, {}), 0.5);
+  // Oier: DEL y MED muy bien, LD cumple
+  const oier = ['DEL', 'MED', 'LD'];
+  assert.equal(positionCost(oier, ld, undefined, { LD: 2 }), 0.75);
+  assert.ok(positionCost(oier, med, undefined, { LD: 2 }) < 0.3);
+  assert.ok(positionCost(oier, ld, undefined, { LD: 2 }) < positionCost(['MED'], ld), '"Cumple" antes que otro de su línea sin marcar');
+  // Luar: LI, LD y MED muy bien; DFC algo peor. El orden solo desempata dentro del nivel.
+  const luar = ['LI', 'DFC', 'LD', 'MED'];
+  const lv = { DFC: 1 };
+  assert.ok(positionCost(luar, ld, undefined, lv) < positionCost(luar, dfc, undefined, lv));
+  assert.ok(positionCost(luar, med, undefined, lv) < positionCost(luar, dfc, undefined, lv));
+  assert.equal(positionCost(luar, li, undefined, lv), 0);
+  // Con minutos iguales, el que juega "Bien" de LD va al lateral y Oier al medio
+  const players = [
+    { id: 'gk', positions: ['POR'] }, { id: 'li', positions: ['LI'] }, { id: 'dfc', positions: ['DFC'] },
+    { id: 'oier', positions: oier, levels: { LD: 2 } }, { id: 'x', positions: ['MED', 'LD'], levels: { LD: 1 } },
+    { id: 'm', positions: ['MED'] }, { id: 'd', positions: ['DEL'] },
+  ].map((p) => ({ ...p, played: 0 }));
+  const l = optimizeLineup({ slots, players });
+  assert.equal(l.DEF3, 'x');
+  assert.ok([l.MED1, l.MED2].includes('oier'));
+});
+
+test('niveles: la igualdad de minutos sigue siendo lo primero (convocatoria real)', () => {
+  const slots = FORMATIONS['3-2-1'].slots;
+  const real = { Maza: ['POR'], Andoni: ['LI', 'DFC', 'LD'], Zaldua: ['LI', 'LD'], Lu: ['LI', 'DFC'], Guerre: ['LD', 'LI', 'DFC'], Jontxo: ['LI', 'DFC', 'LD', 'MED', 'DEL'], Sarasua: ['MED'], Pika: ['MED', 'DEL'], Oier: ['DEL', 'MED', 'LD'], Txipi: ['MED', 'DEL'], Peru: ['DEL'] };
+  const levels = { Oier: { LD: 2 }, Jontxo: { DFC: 1, DEL: 2 }, Lu: { DFC: 1 } };
+  const players = Object.entries(real).map(([id, positions]) => ({ id, positions, levels: levels[id], played: 0 }));
+  const lineup = optimizeLineup({ slots, players, gkCommitMin: 25 });
+  const base = { slots, players, lineup, phase: 'pre', halfLen: HALF, gkHalftimeOnly: true, mustChange: ['1-480'] };
+  const r = chooseScheduleWithRules(base, { firstSec: 480, minStintMin: 7, maxBenchMin: 8 });
+  assert.ok(r.spread <= 2, `diferencia ${r.spread}`);
+  // Nadie fuera de su línea en el plan
+  const plan = planMatchRefined({ ...base, minStintMin: r.rules.minStintMin, maxBenchMin: r.rules.maxBenchMin, points: r.points, handled: new Set(r.handledPast) });
+  for (const c of plan.changes) {
+    for (const s of slots) {
+      const id = c.after[s.id];
+      if (id) assert.notEqual(fitFor(real[id], s), 'no', `${id} en ${s.id}`);
+    }
+  }
 });

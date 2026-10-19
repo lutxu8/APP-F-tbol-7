@@ -1,9 +1,9 @@
 import {
-  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, planMatchRefined, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, adjustSchedule, positionWarnings, chooseScheduleWithRules, lineWarnings, seasonStats, diffLineups,
+  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, planMatchRefined, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, adjustSchedule, positionWarnings, chooseScheduleWithRules, lineWarnings, seasonStats, diffLineups, LEVELS, LEVEL_NAMES, levelOf,
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
-export const APP_VERSION = 20;
+export const APP_VERSION = 21;
 let db = load();
 const ui = { tab: 'match', sel: null, injured: false, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
 
@@ -37,10 +37,14 @@ function sortPlayers(list) {
 function seasonOf() {
   return seasonStats(db.players, db.matches);
 }
-function posChips(positions) {
-  // En orden de preferencia; si hay más de una, numeradas.
+function posChips(positions, levels) {
+  // En orden de preferencia; si hay más de una, numeradas. Las que juega "Bien" o
+  // "Cumple" llevan una marca (· o ··) y se ven más apagadas.
   const pos = (positions || []).filter((r) => ROLES.includes(r));
-  return pos.map((r, i) => `<span class="chip chip-${ROLE_LINE[r]}" title="${i + 1}ª: ${ROLE_NAMES[r]}">${pos.length > 1 ? `<small>${i + 1}</small> ` : ''}${r}</span>`).join('');
+  return pos.map((r, i) => {
+    const lv = levelOf(levels, r);
+    return `<span class="chip chip-${ROLE_LINE[r]} lv${lv}" title="${i + 1}ª: ${ROLE_NAMES[r]} · ${LEVEL_NAMES[lv]}">${pos.length > 1 ? `<small>${i + 1}</small> ` : ''}${r}${lv ? `<small>${lv === 1 ? ' ·' : ' ··'}</small>` : ''}</span>`;
+  }).join('');
 }
 
 // ---------- sonido, vibración y pantalla encendida ----------
@@ -185,6 +189,7 @@ function availablePlayers(L) {
     .map((id) => ({
       id,
       positions: playerById(id).positions || [],
+      levels: playerById(id).levels,
       played: playedNow(L, id),
       // Tiempo en el campo desde que entró (para no quitar a quien lleva menos de 5').
       stint: L.phase !== 'pre' && onField(L, id) && L.enteredAt[id] != null ? clockNow(L) - L.enteredAt[id] : null,
@@ -339,7 +344,7 @@ function startMatchFromSetup() {
   };
   L.lineup = optimizeLineup({
     slots: slotsOf(L.formation),
-    players: squad.map((id, i) => ({ id, positions: playerById(id).positions || [], played: 0, tie: i })),
+    players: squad.map((id, i) => ({ id, positions: playerById(id).positions || [], levels: playerById(id).levels, played: 0, tie: i })),
     gkCommitMin: halfLen / 60,
   });
   recomputeSchedule(L);
@@ -593,7 +598,7 @@ function viewSetup() {
       return `<label class="row check ${on ? 'on' : ''}">
         <input type="checkbox" data-action="toggle-available" data-id="${p.id}" ${on ? 'checked' : ''}>
         <span class="num">${esc(p.number)}</span>
-        <span class="grow"><b>${esc(p.name)}</b><br>${posChips(p.positions)}</span>
+        <span class="grow"><b>${esc(p.name)}</b><br>${posChips(p.positions, p.levels)}</span>
         <span class="muted small">${mins(st[p.id]?.seconds || 0)} · ${st[p.id]?.played || 0} PJ</span>
       </label>`;
     }).join('');
@@ -621,7 +626,7 @@ function viewSetup() {
       return `<label class="row check ${on ? 'on' : 'off'}">
         <input type="checkbox" data-action="toggle-squad" data-id="${p.id}" ${on ? 'checked' : ''}>
         <span class="num">${esc(p.number)}</span>
-        <span class="grow"><b>${esc(p.name)}</b><br>${posChips(p.positions)}</span>
+        <span class="grow"><b>${esc(p.name)}</b><br>${posChips(p.positions, p.levels)}</span>
         <span class="muted small">${mins(st[p.id]?.seconds || 0)} · ${st[p.id]?.played || 0} PJ</span>
       </label>`;
     }).join('');
@@ -861,7 +866,7 @@ function viewLive() {
           <span class="shirt">${esc(pl.number || '·')}</span>
           <span class="pname">${esc(pl.name)}</span>
           <span class="ptime" data-played="${p.id}">${mmss(p.played)}</span>
-          <span class="tiny">${posChips(pl.positions)}</span>
+          <span class="tiny">${posChips(pl.positions, pl.levels)}</span>
         </button>`;
       }).join('') : '<p class="muted">Nadie en el banquillo.</p>'}</div>
   </section>`;
@@ -954,7 +959,7 @@ function viewSquad() {
   const st = seasonOf();
   const list = sortPlayers(db.players).map((p) => `<button class="row" data-action="edit-player" data-id="${p.id}">
       <span class="num">${esc(p.number)}</span>
-      <span class="grow"><b>${esc(p.name)}</b>${p.active === false ? ' <span class="muted small">(baja)</span>' : ''}<br>${posChips(p.positions)}</span>
+      <span class="grow"><b>${esc(p.name)}</b>${p.active === false ? ' <span class="muted small">(baja)</span>' : ''}<br>${posChips(p.positions, p.levels)}</span>
       <span class="muted small">${mins(st[p.id]?.seconds || 0)}<br>${st[p.id]?.played || 0} PJ</span>
     </button>`).join('');
   return `<section class="card">
@@ -1084,13 +1089,17 @@ function renderModal() {
         <label>Dorsal<input type="number" inputmode="numeric" data-bind="modal.player.number" value="${esc(p.number)}"></label>
         <label>Nombre<input type="text" data-bind="modal.player.name" value="${esc(p.name)}" placeholder="Nombre"></label>
       </div>
-      <p class="label">Posiciones en las que puede jugar, de más a menos preferida</p>
+      <p class="label">Posiciones en las que puede jugar, de más a menos preferida, y cómo las juega</p>
       <ol class="pos-order">${p.positions.length ? p.positions.map((r, i) => `<li>
-        <span class="chip chip-${ROLE_LINE[r]}">${r}</span> <span class="grow">${ROLE_NAMES[r]}</span>
-        <button class="mini" data-action="pos-up" data-role="${r}" ${i === 0 ? 'disabled' : ''} aria-label="Subir">▲</button>
-        <button class="mini" data-action="pos-down" data-role="${r}" ${i === p.positions.length - 1 ? 'disabled' : ''} aria-label="Bajar">▼</button>
-        <button class="mini danger" data-action="toggle-pos" data-role="${r}" aria-label="Quitar">✕</button>
+        <div class="pos-line">
+          <span class="chip chip-${ROLE_LINE[r]}">${r}</span> <span class="grow">${ROLE_NAMES[r]}</span>
+          <button class="mini" data-action="pos-up" data-role="${r}" ${i === 0 ? 'disabled' : ''} aria-label="Subir">▲</button>
+          <button class="mini" data-action="pos-down" data-role="${r}" ${i === p.positions.length - 1 ? 'disabled' : ''} aria-label="Bajar">▼</button>
+          <button class="mini danger" data-action="toggle-pos" data-role="${r}" aria-label="Quitar">✕</button>
+        </div>
+        <div class="segmented level-seg">${LEVELS.map((l) => `<button class="seg ${levelOf(p.levels, r) === l ? 'on' : ''}" data-action="set-level" data-role="${r}" data-l="${l}">${LEVEL_NAMES[l]}</button>`).join('')}</div>
       </li>`).join('') : '<li class="muted small">Toca las posiciones de abajo en orden: la primera que toques será su posición preferida.</li>'}</ol>
+      ${p.positions.length > 1 ? '<p class="muted small">El nivel manda más que el orden: el orden solo desempata entre posiciones del mismo nivel. Si todas están en <b>Muy bien</b>, decide el orden. Que todos jueguen lo mismo sigue siendo lo primero.</p>' : ''}
       <div class="pos-picker">${ROLES.filter((r) => !p.positions.includes(r)).map((r) => `<button class="pos chip-${ROLE_LINE[r]}" data-action="toggle-pos" data-role="${r}">+ ${r}<small>${ROLE_NAMES[r]}</small></button>`).join('')}</div>
       <label class="switch"><input type="checkbox" data-bind="modal.player.active" ${p.active !== false ? 'checked' : ''}> Disponible por defecto (en plantilla activa)</label>
       <div class="toolbar">
@@ -1219,6 +1228,11 @@ const actions = {
     p.positions = p.positions.includes(d.role) ? p.positions.filter((r) => r !== d.role) : [...p.positions, d.role];
     renderModal();
   },
+  'set-level': (d) => {
+    const p = ui.modal.player;
+    p.levels = { ...(p.levels || {}), [d.role]: Number(d.l) };
+    renderModal();
+  },
   'pos-up': (d) => {
     const pos = ui.modal.player.positions; const i = pos.indexOf(d.role);
     if (i > 0) [pos[i - 1], pos[i]] = [pos[i], pos[i - 1]];
@@ -1234,6 +1248,9 @@ const actions = {
     p.name = (p.name || '').trim();
     if (!p.name) { alert('Pon un nombre.'); return; }
     if (!p.positions.length) { alert('Marca al menos una posición.'); return; }
+    // Solo se guardan los niveles de sus posiciones que no son "Muy bien".
+    const levels = Object.fromEntries(p.positions.filter((r) => levelOf(p.levels, r) > 0).map((r) => [r, levelOf(p.levels, r)]));
+    if (Object.keys(levels).length) p.levels = levels; else delete p.levels;
     const i = db.players.findIndex((x) => x.id === p.id);
     if (i >= 0) db.players[i] = p; else db.players.push(p);
     if (ui.modal.isNew && db.setup && !db.setup.available.includes(p.id) && p.active !== false) db.setup.available.push(p.id);
