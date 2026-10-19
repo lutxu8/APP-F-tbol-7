@@ -81,7 +81,7 @@ main { padding: 12px 12px 0; max-width: 720px; margin: 0 auto; }
 
 /* Formularios */
 label { display: block; font-size: .85rem; color: var(--muted); margin: 8px 0; }
-input[type=text], input[type=number], input[type=date], select {
+input[type=text], input[type=number], input[type=date], input[type=search], select {
   display: block; width: 100%; margin-top: 4px; padding: 10px 12px; font-size: 16px;
   background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
 }
@@ -129,6 +129,9 @@ input[type=text], input[type=number], input[type=date], select {
 .score { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
 .score .team { background: var(--card-2); border-radius: 10px; padding: 6px; font-size: .8rem; color: var(--muted); overflow: hidden; }
 .score .team span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.score .team .rival-name { display: block; width: 100%; background: none; border: 0; padding: 0; font: inherit; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+#match-search { width: 100%; margin-bottom: 8px; }
+[hidden] { display: none !important; }
 .goals { display: flex; justify-content: center; align-items: center; gap: 12px; color: var(--text); }
 .goals b { font-size: 1.6rem; min-width: 1.5ch; }
 

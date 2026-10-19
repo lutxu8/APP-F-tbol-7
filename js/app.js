@@ -3,7 +3,7 @@ import {
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
-export const APP_VERSION = 19;
+export const APP_VERSION = 20;
 let db = load();
 const ui = { tab: 'match', sel: null, injured: false, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
 
@@ -634,6 +634,10 @@ function viewSetup() {
   const formOpts = Object.entries(FORMATIONS).map(([k, f]) => `<button class="seg ${S.formation === k ? 'on' : ''}" data-action="set-formation" data-f="${k}">${f.name}</button>`).join('');
   return `<section class="card">
     <h2>Nuevo partido · 2/2</h2>
+    <div class="grid2">
+      <label>Rival<input type="text" data-bind="setup.rival" value="${esc(S.rival || '')}" placeholder="Nombre del rival"></label>
+      <label>Fecha<input type="date" data-bind="setup.date" value="${esc(S.date)}"></label>
+    </div>
     ${excess ? `<p class="note">Hay <b>${avail.length}</b> disponibles y caben <b>${max}</b>. Entran primero los que <b>menos minutos</b> llevan en la temporada (puedes ajustarlo a mano).</p>` : '<p class="muted">Convocatoria</p>'}
     <div class="list">${rows}</div>
     <p class="muted small">Convocados: <b>${S.squad.length}</b> / ${max}</p>
@@ -790,7 +794,7 @@ function viewLive() {
   const score = `<div class="score">
       <div class="team"><span>${esc(db.settings.teamName || 'Nosotros')}</span>
         <div class="goals"><button class="mini" data-action="goal" data-side="for" data-d="-1">−</button><b>${L.goalsFor}</b><button class="mini" data-action="goal" data-side="for" data-d="1">+</button></div></div>
-      <div class="team"><span>${esc(L.rival || 'Rival')}</span>
+      <div class="team"><button class="rival-name" data-action="edit-rival">${esc(L.rival || 'Rival')} ✎</button>
         <div class="goals"><button class="mini" data-action="goal" data-side="against" data-d="-1">−</button><b>${L.goalsAgainst}</b><button class="mini" data-action="goal" data-side="against" data-d="1">+</button></div></div>
     </div>`;
   const clock = `<section class="card clock-card ${L.running ? 'running' : ''}">
@@ -967,7 +971,8 @@ function viewStats() {
     .sort((a, b) => b.seconds - a.seconds)
     .map((s) => `<tr><td>${esc(playerById(s.id)?.name ?? s.name)}</td><td class="num-c">${s.called}</td><td class="num-c">${s.played}</td><td class="num-c">${Math.round(s.seconds / 60)}</td><td class="num-c">${s.played ? Math.round(s.seconds / 60 / s.played) : 0}</td></tr>`)
     .join('');
-  const matches = [...db.matches].sort((a, b) => String(b.date).localeCompare(String(a.date))).map((m) => `<button class="row" data-action="show-match" data-id="${m.id}">
+  const q = norm(ui.matchFilter);
+  const matches = [...db.matches].sort((a, b) => String(b.date).localeCompare(String(a.date))).map((m) => `<button class="row" data-action="show-match" data-id="${m.id}" data-rival="${esc(norm(m.rival))}" ${q && !norm(m.rival).includes(q) ? 'hidden' : ''}>
       <span class="grow"><b>${esc(m.rival || 'Rival')}</b><br><span class="muted small">${fmtDate(m.date)} · ${FORMATIONS[m.formation]?.name ?? ''}</span></span>
       <span class="result">${m.goalsFor ?? 0} – ${m.goalsAgainst ?? 0}</span>
     </button>`).join('');
@@ -976,7 +981,11 @@ function viewStats() {
     <table class="table"><thead><tr><th>Jugador</th><th>Conv.</th><th>PJ</th><th>Min</th><th>Media</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="muted">Sin datos</td></tr>'}</tbody></table>
     <p class="muted small">Conv. = convocatorias · PJ = partidos jugados · Media = minutos por partido jugado.</p>
   </section>
-  <section class="card"><h2>Partidos (${db.matches.length})</h2><div class="list">${matches || '<p class="muted">Aún no hay partidos.</p>'}</div></section>`;
+  <section class="card"><h2>Partidos (${db.matches.length})</h2>
+    ${db.matches.length ? `<input type="search" id="match-search" value="${esc(ui.matchFilter || '')}" placeholder="🔍 Buscar rival" autocomplete="off">` : ''}
+    <div class="list">${matches || '<p class="muted">Aún no hay partidos.</p>'}</div>
+    <p class="muted small" id="match-none" ${q && db.matches.some((m) => norm(m.rival).includes(q)) || !q ? 'hidden' : ''}>Ningún partido contra ese rival.</p>
+  </section>`;
 }
 
 function viewSettings() {
@@ -1104,7 +1113,11 @@ function renderModal() {
     if (!match) { ui.modal = null; $modal.innerHTML = ''; return; }
     const rows = [...match.players].sort((a, b) => b.seconds - a.seconds).map((r) => `<tr><td>${esc(playerById(r.id)?.name ?? r.name)}</td><td class="num-c">${mmss(r.seconds)}</td></tr>`).join('');
     body = `<h2>${esc(match.rival || 'Rival')} <span class="muted">${match.goalsFor ?? 0} – ${match.goalsAgainst ?? 0}</span></h2>
-      <p class="muted">${fmtDate(match.date)} · ${FORMATIONS[match.formation]?.name ?? ''}</p>
+      <div class="grid2">
+        <label>Rival<input type="text" data-bind="match.rival" value="${esc(match.rival || '')}" placeholder="Nombre del rival"></label>
+        <label>Fecha<input type="date" data-bind="match.date" value="${esc(match.date || '')}"></label>
+      </div>
+      <p class="muted">${FORMATIONS[match.formation]?.name ?? ''}</p>
       <table class="table"><thead><tr><th>Jugador</th><th>Minutos</th></tr></thead><tbody>${rows}</tbody></table>
       ${matchLogHtml(match)}
       <div class="toolbar">
@@ -1234,7 +1247,16 @@ const actions = {
     if (db.setup) { db.setup.available = db.setup.available.filter((x) => x !== p.id); db.setup.squad = db.setup.squad.filter((x) => x !== p.id); }
     ui.modal = null; persist(); render();
   },
-  'close-modal': () => { ui.modal = null; renderModal(); },
+  'close-modal': () => { const wasMatch = ui.modal?.type === 'match'; ui.modal = null; renderModal(); if (wasMatch) render(); },
+  'edit-rival': () => {
+    const L = db.live;
+    if (!L) return;
+    const v = prompt('Nombre del rival', L.rival || '');
+    if (v === null) return;
+    L.rival = v.trim();
+    if (db.setup) db.setup.rival = L.rival;
+    persist(); render();
+  },
   'copy-data': async () => {
     const text = exportJSON(db, { compact: true });
     try {
@@ -1314,12 +1336,30 @@ document.addEventListener('change', (e) => {
   if (el.dataset.bind) bind(el, true);
 });
 document.addEventListener('input', (e) => {
+  if (e.target.id === 'match-search') { filterMatches(e.target.value); return; }
   if (e.target.dataset.bind && e.target.type !== 'checkbox' && e.target.tagName !== 'SELECT') bind(e.target, false);
 });
 
+// Sin tildes ni mayúsculas, para buscar rivales.
+function norm(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim(); }
+
+function filterMatches(text) {
+  ui.matchFilter = text;
+  const q = norm(text);
+  let any = false;
+  document.querySelectorAll('[data-action="show-match"]').forEach((el) => {
+    const ok = !q || el.dataset.rival.includes(q);
+    el.hidden = !ok;
+    any = any || ok;
+  });
+  const none = document.getElementById('match-none');
+  if (none) none.hidden = any;
+}
+
 function bind(el, rerender) {
   const [root, ...path] = el.dataset.bind.split('.');
-  let obj = root === 'setup' ? db.setup : root === 'settings' ? db.settings : root === 'modal' ? ui.modal : null;
+  let obj = root === 'setup' ? db.setup : root === 'settings' ? db.settings : root === 'modal' ? ui.modal
+    : root === 'match' ? db.matches.find((x) => x.id === ui.modal?.id) : null;
   if (!obj) return;
   const last = path.pop();
   for (const k of path) obj = obj[k];
