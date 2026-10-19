@@ -1,6 +1,6 @@
 // Con conexión, siempre la última versión de la app (red primero); sin
 // conexión (p. ej. en el campo), la copia guardada.
-const CACHE = 'futbol7-v18';
+const CACHE = 'futbol7-v19';
 const ASSETS = [
   './',
   './index.html',

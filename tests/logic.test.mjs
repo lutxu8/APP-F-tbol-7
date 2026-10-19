@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FORMATIONS, planMatchRefined, fitFor, migratePositions, recommendReplacement, adjustSchedule, positionWarnings, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
+import { FORMATIONS, planMatchRefined, fitFor, rankFor, positionCost, lineWarnings, chooseScheduleWithRules, migratePositions, recommendReplacement, adjustSchedule, positionWarnings, hungarian, optimizeLineup, planMatch, chooseSchedule, intervalPoints, proposeSquad, diffLineups } from '../js/logic.js';
 
 const HALF = 25 * 60;
 
@@ -268,4 +268,45 @@ test('nadie pasa más de 9 min seguidos en el banquillo (9 a 13 convocados)', ()
     assert.ok(worst <= 9 * 60 + 1, `n=${n}: ${(worst / 60).toFixed(1)} min seguidos en el banquillo`);
     assert.equal(plan.changes.reduce((a, c) => a + c.shortOuts, 0), 0, `n=${n}: alguien sale con menos de 5 min`);
   }
+});
+
+test('posiciones en orden de preferencia', () => {
+  const [, li, dfc] = FORMATIONS['3-2-1'].slots;
+  assert.equal(rankFor(['MED', 'DFC', 'LI'], dfc), 1);
+  assert.equal(rankFor(['MED', 'DFC', 'LI'], li), 2);
+  assert.equal(rankFor(['POR', 'DFC'], dfc), 0, 'la portería no cuenta en el orden de campo');
+  assert.ok(positionCost(['DFC', 'LI'], dfc) < positionCost(['LI', 'DFC'], dfc));
+  assert.ok(positionCost(['LD'], li) < positionCost(['MED'], li), 'misma línea antes que otra línea');
+  // En igualdad de minutos, cada uno a su posición preferida
+  const slots = FORMATIONS['3-2-1'].slots;
+  const players = [
+    { id: 'gk', positions: ['POR'] }, { id: 'a', positions: ['LD', 'LI'] }, { id: 'b', positions: ['LI', 'LD'] }, { id: 'c', positions: ['DFC'] },
+    { id: 'm1', positions: ['MED'] }, { id: 'm2', positions: ['MED'] }, { id: 'd', positions: ['DEL'] },
+  ].map((p) => ({ ...p, played: 0 }));
+  const l = optimizeLineup({ slots, players });
+  assert.equal(l.DEF1, 'b'); // LI
+  assert.equal(l.DEF3, 'a'); // LD
+});
+
+test('aviso de línea justa (convocatoria real del equipo)', () => {
+  const slots = FORMATIONS['3-2-1'].slots;
+  const real = { Maza: ['POR'], Andoni: ['LI', 'DFC', 'LD'], Zaldua: ['LI', 'LD'], Lu: ['LI', 'DFC'], Guerre: ['LD', 'LI', 'DFC'], Jontxo: ['LI', 'DFC', 'LD', 'MED', 'DEL'], Sarasua: ['MED'], Pika: ['MED', 'DEL'], Oier: ['MED', 'DEL'], Txipi: ['MED', 'DEL'], Peru: ['DEL'] };
+  const players = Object.entries(real).map(([id, positions]) => ({ id, positions }));
+  // Con estas posiciones las líneas están cubiertas (Jontxo cubre lo que falta)
+  assert.deepEqual(lineWarnings(slots, players), []);
+  // Sin Jontxo, sí falta gente atrás
+  const sinJontxo = players.filter((p) => p.id !== 'Jontxo').concat([{ id: 'x', positions: ['MED'] }]);
+  assert.ok(lineWarnings(slots, sinJontxo).some((w) => w.line === 'DEF'));
+});
+
+test('reglas de tiempo seguido: se aplican si dejan jugar a todos lo mismo y si no se relajan', () => {
+  const slots = FORMATIONS['3-2-1'].slots;
+  const ALL = ['LI', 'DFC', 'LD', 'MED', 'DEL'];
+  const players = [{ id: 'gk', positions: ['POR'], played: 0 }, ...Array.from({ length: 9 }, (_, i) => ({ id: 'p' + i, positions: ALL, played: 0 }))];
+  const lineup = optimizeLineup({ slots, players, gkCommitMin: 25 });
+  const base = { slots, players, lineup, phase: 'pre', halfLen: HALF, gkHalftimeOnly: true, mustChange: ['1-480'] };
+  const r = chooseScheduleWithRules(base, { firstSec: 480, minStintMin: 7, maxBenchMin: 8 });
+  assert.deepEqual(r.rules, { minStintMin: 7, maxBenchMin: 8 });
+  assert.equal(r.relaxed, false);
+  assert.ok(r.spread <= 2);
 });

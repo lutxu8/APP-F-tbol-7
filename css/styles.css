@@ -266,3 +266,11 @@ code { background: var(--bg); padding: 0 4px; border-radius: 4px; }
 
 .match-log { margin: 12px 0; }
 .match-log li { font-size: .92rem; }
+
+/* Posiciones en orden de preferencia */
+.pos-order { list-style: none; padding: 0; margin: 6px 0 10px; display: flex; flex-direction: column; gap: 6px; counter-reset: pos; }
+.pos-order li { display: flex; align-items: center; gap: 8px; background: var(--card-2); border-radius: 10px; padding: 6px 8px; counter-increment: pos; }
+.pos-order li::before { content: counter(pos) 'ª'; font-weight: 800; color: var(--accent); min-width: 2ch; }
+.pos-order li.muted::before { content: none; }
+.pos-order .mini:disabled { opacity: .3; }
+.chip small { font-size: .6rem; opacity: .75; }

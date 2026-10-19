@@ -3,7 +3,7 @@ import { migratePositions } from './logic.js';
 
 const KEY = 'futbol7-rotaciones.v1';
 
-export const DEFAULT_SETTINGS = { teamName: 'Mi equipo', halfMinutes: 25, maxSquad: 12, maxBench: 9 };
+export const DEFAULT_SETTINGS = { teamName: 'Mi equipo', halfMinutes: 25, maxSquad: 12, maxBench: 8, minStint: 7 };
 
 function fresh() {
   return { version: 1, players: [], matches: [], settings: { ...DEFAULT_SETTINGS }, setup: null, live: null };
@@ -15,7 +15,10 @@ export function load() {
     if (!raw) return fresh();
     const db = JSON.parse(raw);
     for (const p of db.players || []) p.positions = migratePositions(p.positions);
-    return { ...fresh(), ...db, settings: { ...DEFAULT_SETTINGS, ...(db.settings || {}) } };
+    const settings = { ...DEFAULT_SETTINGS, ...(db.settings || {}) };
+    // Reglas pedidas por el equipo: mínimo 7' en el campo y máximo 8' en el banquillo.
+    if (!settings.rulesV2) { settings.minStint = 7; if (Number(settings.maxBench) === 9) settings.maxBench = 8; settings.rulesV2 = true; }
+    return { ...fresh(), ...db, settings };
   } catch (e) {
     console.error(e);
     return fresh();

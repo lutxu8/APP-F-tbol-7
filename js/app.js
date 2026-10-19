@@ -1,9 +1,9 @@
 import {
-  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, planMatchRefined, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, adjustSchedule, positionWarnings, seasonStats, diffLineups,
+  ROLES, ROLE_NAMES, ROLE_LINE, FORMATIONS, fitFor, optimizeLineup, planMatch, planMatchRefined, chooseSchedule, intervalPoints, pointKey, proposeSquad, recommendReplacement, adjustSchedule, positionWarnings, chooseScheduleWithRules, lineWarnings, seasonStats, diffLineups,
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
-export const APP_VERSION = 18;
+export const APP_VERSION = 19;
 let db = load();
 const ui = { tab: 'match', sel: null, injured: false, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
 
@@ -38,7 +38,9 @@ function seasonOf() {
   return seasonStats(db.players, db.matches);
 }
 function posChips(positions) {
-  return ROLES.filter((r) => (positions || []).includes(r)).map((r) => `<span class="chip chip-${ROLE_LINE[r]}" title="${ROLE_NAMES[r]}">${r}</span>`).join('');
+  // En orden de preferencia; si hay más de una, numeradas.
+  const pos = (positions || []).filter((r) => ROLES.includes(r));
+  return pos.map((r, i) => `<span class="chip chip-${ROLE_LINE[r]}" title="${i + 1}ª: ${ROLE_NAMES[r]}">${pos.length > 1 ? `<small>${i + 1}</small> ` : ''}${r}</span>`).join('');
 }
 
 // ---------- sonido, vibración y pantalla encendida ----------
@@ -200,22 +202,39 @@ function planBase(L) {
     halfLen: L.halfLen,
     handled: new Set(L.handled),
     gkHalftimeOnly: L.gkHalftimeOnly,
-    maxBenchMin: Number(db.settings.maxBench) || null,
+    // Reglas de tiempo seguido: las aplicadas al planificar (pueden estar relajadas) o las pedidas.
+    minStintMin: L.rules ? L.rules.minStintMin : requestedRules().minStintMin,
+    maxBenchMin: L.rules ? L.rules.maxBenchMin : requestedRules().maxBenchMin,
     // La primera remesa fijada por el usuario siempre tiene cambios.
     mustChange: L.freq === 'auto' && L.firstChange && L.firstChange < L.halfLen ? [pointKey({ h: 1, t: L.firstChange })] : [],
   };
 }
+/** Reglas pedidas en Ajustes: mínimo seguido en el campo y máximo seguido en el banquillo. */
+function requestedRules() {
+  return { minStintMin: Number(db.settings.minStint) || 5, maxBenchMin: Number(db.settings.maxBench) || null };
+}
+
 function recomputeSchedule(L) {
   L.locked = null; // el próximo cambio se vuelve a anunciar con el plan nuevo
   // En la previa no hay nada hecho ni omitido todavía: se empieza de cero
   // (si no, un minuto descartado en una prueba anterior se saltaría después).
-  if (L.phase === 'pre') L.handled = [];
+  if (L.phase === 'pre') { L.handled = []; L.rules = null; }
   const base = planBase(L);
-  if (L.freq === 'auto') {
-    const best = chooseSchedule(base, { firstSec: L.firstChange || null, current: L.phase === 'pre' ? null : L.points });
+  if (L.freq === 'auto' && L.phase === 'pre') {
+    // En la previa se eligen las reglas: las pedidas o, si no dejan jugar a todos lo
+    // mismo con esta convocatoria, relajadas lo justo.
+    const req = requestedRules();
+    const best = chooseScheduleWithRules(base, { firstSec: L.firstChange || null, ...req });
+    L.points = best.points;
+    L.handled = best.handledPast;
+    L.rules = best.rules;
+    L.rulesRelaxed = best.relaxed;
+  } else if (L.freq === 'auto') {
+    const best = chooseSchedule(base, { firstSec: L.firstChange || null, current: L.points });
     L.points = best.points;
     L.handled = best.handledPast;
   } else {
+    if (L.phase === 'pre') { L.rules = requestedRules(); L.rulesRelaxed = false; }
     L.points = intervalPoints(L.halfLen, Number(L.freq));
     const curH = L.phase === 'h2' || L.phase === 'break' ? 2 : 1;
     const t = base.halfSec;
@@ -637,9 +656,12 @@ const joinY = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} y ${xs[xs.
 
 /** Avisos de posiciones con pocos jugadores para el sistema elegido. */
 function positionWarningTexts(formation, players) {
-  return positionWarnings(slotsOf(formation), players, db.settings.halfMinutes || 25).map((w) => (w.count
+  const LINE_NAMES = { DEF: 'La defensa', MED: 'El centro del campo', DEL: 'La delantera' };
+  const LINE_WHO = { DEF: 'defender', MED: 'jugar en el medio', DEL: 'jugar arriba' };
+  const lineTxt = lineWarnings(slotsOf(formation), players).map((w) => `${LINE_NAMES[w.line]} va justa con estos convocados: para que todos jueguen lo mismo, alguien tendrá que jugar ahí fuera de su posición. Si alguno más puede ${LINE_WHO[w.line]}, márcalo en su ficha (aunque sea como última opción).`);
+  return lineTxt.concat(positionWarnings(slotsOf(formation), players, db.settings.halfMinutes || 25).map((w) => (w.count
     ? `Solo ${w.count === 1 ? 'hay 1 jugador' : `hay ${w.count} jugadores`} para ${w.label} (${esc(joinY(w.names))}): ${w.count === 1 ? 'jugará' : 'jugarán'} más minutos que el resto. Marca a más jugadores en esa posición o cambia de sistema.`
-    : `Nadie puede jugar de ${w.label}: lo cubrirá alguien de otra posición.`));
+    : `Nadie puede jugar de ${w.label}: lo cubrirá alguien de otra posición.`)));
 }
 
 /** Selector de cada cuántos minutos se hacen los cambios. */
@@ -657,7 +679,7 @@ function freqControl(scope, freq, halfLen, adjust = true, points = null, first =
     detail = pts.length ? `Cambios en el min ${joinY(pts)} de cada parte, y en el descanso.` : 'Solo habrá cambios en el descanso.';
     if (adjust && pts.length) detail += ' Alguno puede moverse hasta 3 min para que todos jueguen lo mismo.';
   } else if (first) {
-    detail = `Primera remesa en el min ${fmtMin(first)}. Después la app decide cuándo cambiar para que todos jueguen lo mismo, sin quitar a nadie que lleve menos de 5 min en el campo${Number(db.settings.maxBench) ? ` ni dejar a nadie más de ${db.settings.maxBench} min seguidos en el banquillo` : ''}.`;
+    detail = `Primera remesa en el min ${fmtMin(first)}. Después la app decide cuándo cambiar para que todos jueguen lo mismo, respetando, siempre que se pueda, el mínimo seguido en el campo y el máximo seguido en el banquillo.`;
   } else {
     detail = 'La app elige los momentos que dejan los minutos más iguales con el menor número de cambios.';
   }
@@ -875,10 +897,21 @@ function viewLive() {
   </section>`;
 
   const posWarn = L.phase === 'pre' ? positionWarningTexts(L.formation, availablePlayers(L).map((p) => playerById(p.id))) : [];
-  const freqCard = L.phase === 'pre' ? `<section class="card">${posWarn.map((w) => `<p class="warn">⚠️ ${w}</p>`).join('')}<h3>Cambios</h3>${freqControl('live', L.freq, L.halfLen, L.freqAdjust !== false, L.points, L.firstChange ?? null)}</section>` : '';
+  const freqCard = L.phase === 'pre' ? `<section class="card">${posWarn.map((w) => `<p class="warn">⚠️ ${w}</p>`).join('')}<h3>Cambios</h3>${freqControl('live', L.freq, L.halfLen, L.freqAdjust !== false, L.points, L.firstChange ?? null)}${rulesText(L)}</section>` : '';
   const showSheet = ui.sel?.kind === 'slot' && L.lineup[ui.sel.id] && ['h1', 'h2', 'break'].includes(L.phase);
   const sheet = showSheet ? viewSubSheet(L) : '';
   return clock + banner + freqCard + (L.phase === 'end' ? '' : pitch + benchHtml) + planHtml + table + footer + sheet;
+}
+
+/** Qué reglas de tiempo seguido se aplican en este partido. */
+function rulesText(L) {
+  const r = L.rules || requestedRules();
+  const req = requestedRules();
+  const txt = `mínimo <b>${r.minStintMin}'</b> seguidos en el campo · máximo <b>${r.maxBenchMin ? r.maxBenchMin + "'" : 'sin límite'}</b> seguidos en el banquillo`;
+  if (L.rulesRelaxed) {
+    return `<p class="note small">Reglas para este partido: ${txt}. Con esta convocatoria, lo que pediste en Ajustes (${req.minStintMin}' y ${req.maxBenchMin ? req.maxBenchMin + "'" : 'sin límite'}) haría que unos jugaran bastante más que otros, así que se ha relajado lo justo para que todos jueguen lo mismo.</p>`;
+  }
+  return `<p class="muted small">Reglas: ${txt}.</p>`;
 }
 
 /** Resumen del tramo más largo seguido en el banquillo según el plan. */
@@ -955,10 +988,15 @@ function viewSettings() {
       <label>Minutos por parte<input type="number" inputmode="numeric" min="5" max="45" data-bind="settings.halfMinutes" value="${esc(s.halfMinutes)}"></label>
       <label>Máx. convocados<input type="number" inputmode="numeric" min="7" max="25" data-bind="settings.maxSquad" value="${esc(s.maxSquad)}"></label>
     </div>
-    <label>Máximo seguido en el banquillo<select data-bind="settings.maxBench">
-      ${[['8', '8 minutos'], ['9', '9 minutos'], ['10', '10 minutos'], ['0', 'Sin límite']].map(([v, l]) => `<option value="${v}" ${String(s.maxBench ?? 9) === v ? 'selected' : ''}>${l}</option>`).join('')}
-    </select></label>
-    <p class="muted small">La app procura que nadie pase más de ese tiempo seguido sin jugar (los porteros que solo son porteros no cuentan). Con muchos convocados (13–14) puede no ser posible del todo.</p>
+    <div class="grid2">
+      <label>Mínimo seguido en el campo<select data-bind="settings.minStint">
+        ${[['5', '5 minutos'], ['6', '6 minutos'], ['7', '7 minutos'], ['8', '8 minutos']].map(([v, l]) => `<option value="${v}" ${String(s.minStint ?? 7) === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select></label>
+      <label>Máximo seguido en el banquillo<select data-bind="settings.maxBench">
+        ${[['7', '7 minutos'], ['8', '8 minutos'], ['9', '9 minutos'], ['10', '10 minutos'], ['0', 'Sin límite']].map(([v, l]) => `<option value="${v}" ${String(s.maxBench ?? 8) === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select></label>
+    </div>
+    <p class="muted small">La app procura que nadie salga del campo antes del mínimo ni pase más del máximo seguido en el banquillo (los porteros que solo son porteros no cuentan). Igualar minutos va primero: si con una convocatoria no se puede cumplir todo, en la previa verás qué valores se aplican.</p>
   </section>
   <section class="card">
     <h2>Compartir y copia de seguridad</h2>
@@ -1037,8 +1075,14 @@ function renderModal() {
         <label>Dorsal<input type="number" inputmode="numeric" data-bind="modal.player.number" value="${esc(p.number)}"></label>
         <label>Nombre<input type="text" data-bind="modal.player.name" value="${esc(p.name)}" placeholder="Nombre"></label>
       </div>
-      <p class="label">Posiciones en las que puede jugar</p>
-      <div class="pos-picker">${ROLES.map((r) => `<button class="pos ${p.positions.includes(r) ? 'on' : ''} chip-${ROLE_LINE[r]}" data-action="toggle-pos" data-role="${r}">${r}<small>${ROLE_NAMES[r]}</small></button>`).join('')}</div>
+      <p class="label">Posiciones en las que puede jugar, de más a menos preferida</p>
+      <ol class="pos-order">${p.positions.length ? p.positions.map((r, i) => `<li>
+        <span class="chip chip-${ROLE_LINE[r]}">${r}</span> <span class="grow">${ROLE_NAMES[r]}</span>
+        <button class="mini" data-action="pos-up" data-role="${r}" ${i === 0 ? 'disabled' : ''} aria-label="Subir">▲</button>
+        <button class="mini" data-action="pos-down" data-role="${r}" ${i === p.positions.length - 1 ? 'disabled' : ''} aria-label="Bajar">▼</button>
+        <button class="mini danger" data-action="toggle-pos" data-role="${r}" aria-label="Quitar">✕</button>
+      </li>`).join('') : '<li class="muted small">Toca las posiciones de abajo en orden: la primera que toques será su posición preferida.</li>'}</ol>
+      <div class="pos-picker">${ROLES.filter((r) => !p.positions.includes(r)).map((r) => `<button class="pos chip-${ROLE_LINE[r]}" data-action="toggle-pos" data-role="${r}">+ ${r}<small>${ROLE_NAMES[r]}</small></button>`).join('')}</div>
       <label class="switch"><input type="checkbox" data-bind="modal.player.active" ${p.active !== false ? 'checked' : ''}> Disponible por defecto (en plantilla activa)</label>
       <div class="toolbar">
         ${m.isNew ? '' : '<button class="btn danger-outline" data-action="delete-player">Eliminar</button>'}
@@ -1162,6 +1206,16 @@ const actions = {
     p.positions = p.positions.includes(d.role) ? p.positions.filter((r) => r !== d.role) : [...p.positions, d.role];
     renderModal();
   },
+  'pos-up': (d) => {
+    const pos = ui.modal.player.positions; const i = pos.indexOf(d.role);
+    if (i > 0) [pos[i - 1], pos[i]] = [pos[i], pos[i - 1]];
+    renderModal();
+  },
+  'pos-down': (d) => {
+    const pos = ui.modal.player.positions; const i = pos.indexOf(d.role);
+    if (i >= 0 && i < pos.length - 1) [pos[i + 1], pos[i]] = [pos[i], pos[i + 1]];
+    renderModal();
+  },
   'save-player': () => {
     const p = ui.modal.player;
     p.name = (p.name || '').trim();
@@ -1274,7 +1328,7 @@ function bind(el, rerender) {
   obj[last] = v;
   if (root !== 'modal') persist();
   if (root === 'settings' && last === 'teamName') document.getElementById('team-name').textContent = v || 'Fútbol 7';
-  if (root === 'settings' && last === 'maxBench' && db.live && db.live.phase !== 'end') { recomputeSchedule(db.live); persist(); }
+  if (root === 'settings' && (last === 'maxBench' || last === 'minStint') && db.live && db.live.phase !== 'end') { recomputeSchedule(db.live); persist(); }
   if (rerender && root !== 'modal' && el.type !== 'text') render();
 }
 

@@ -47,6 +47,81 @@ export function fitFor(positions, slot) {
   return 'no';
 }
 
+/**
+ * Preferencia del jugador por este puesto: 0 = su 1ª posición, 1 = la 2ª... (las
+ * posiciones se guardan en orden de preferencia). -1 si no la tiene marcada.
+ */
+export function rankFor(positions, slot) {
+  // Para los puestos de campo, la portería no cuenta en el orden.
+  const pos = slot.role === 'POR' ? positions || [] : (positions || []).filter((r) => r !== 'POR');
+  const accepts = slot.accepts || [slot.role];
+  let best = -1;
+  for (const r of accepts) { const i = pos.indexOf(r); if (i >= 0 && (best < 0 || i < best)) best = i; }
+  return best;
+}
+
+/**
+ * "Coste" de que un jugador ocupe un puesto, en minutos equivalentes de
+ * diferencia que la app aceptaría para evitarlo: 1ª posición 0, cada posición
+ * más abajo en su lista un poco más (máx. 0,75), misma línea sin marcar 1,
+ * otra línea 2,5. Igualar minutos sigue siendo lo primero.
+ */
+export function positionCost(positions, slot, { rankStepMin = 0.25, linePenaltyMin = 1, offPenaltyMin = 2.5 } = {}) {
+  const rank = rankFor(positions, slot);
+  if (rank >= 0) return Math.min(rankStepMin * rank, 0.75);
+  return fitFor(positions, slot) === 'line' ? linePenaltyMin : offPenaltyMin;
+}
+
+const FIELD_LINES = ['DEF', 'MED', 'DEL'];
+
+function lineDemandAndPlayers(slots, players) {
+  const field = players.filter((p) => (p.positions || []).some((r) => r !== 'POR'));
+  const fieldSlots = slots.filter((s) => s.role !== 'POR');
+  const demand = {};
+  // Jugadores-equivalentes que necesita cada línea si todos juegan lo mismo.
+  for (const L of FIELD_LINES) demand[L] = fieldSlots.length ? (fieldSlots.filter((s) => ROLE_LINE[s.role] === L).length * field.length) / fieldSlots.length : 0;
+  const lines = field.map((p) => [...new Set((p.positions || []).map((r) => ROLE_LINE[r]).filter((L) => L !== 'POR'))]);
+  return { demand, lines };
+}
+
+/**
+ * Lo justa que va cada línea (defensa, medio, ataque): jugadores que necesita
+ * frente a jugadores que la pueden cubrir. Sirve para reservar a los polivalentes
+ * para la línea más justa.
+ */
+export function lineScarcity(slots, players) {
+  const { demand, lines } = lineDemandAndPlayers(slots, players);
+  const out = {};
+  for (const L of FIELD_LINES) {
+    const capable = lines.filter((ls) => ls.includes(L)).length;
+    out[L] = demand[L] ? demand[L] / Math.max(capable, 0.5) : 0;
+  }
+  return out;
+}
+
+/**
+ * ¿Pueden los convocados cubrir los minutos de cada línea jugando todos lo mismo
+ * y cada uno en posiciones que tiene marcadas? Reparto óptimo (flujo máximo).
+ * Devuelve lo que falta en cada línea, en jugadores-equivalentes.
+ */
+export function lineShortage(slots, players) {
+  const { demand, lines } = lineDemandAndPlayers(slots, players);
+  // Red: fuente -> jugador (1) -> línea (si la puede jugar) -> sumidero (demanda).
+  const P = lines.length; const n = P + 5; const S = P + 3; const T = P + 4;
+  const cap = Array.from({ length: n }, () => new Array(n).fill(0));
+  const li = { DEF: P, MED: P + 1, DEL: P + 2 };
+  lines.forEach((ls, i) => { cap[S][i] = 1; for (const L of ls) cap[i][li[L]] = 1; });
+  for (const L of FIELD_LINES) cap[li[L]][T] = demand[L];
+  for (;;) {
+    const prev = new Array(n).fill(-1); prev[S] = S; const q = [S];
+    while (q.length && prev[T] < 0) { const u = q.shift(); for (let v = 0; v < n; v++) if (prev[v] < 0 && cap[u][v] > 1e-9) { prev[v] = u; q.push(v); } }
+    if (prev[T] < 0) break;
+    let f = Infinity; for (let v = T; v !== S; v = prev[v]) f = Math.min(f, cap[prev[v]][v]);
+    for (let v = T; v !== S; v = prev[v]) { cap[prev[v]][v] -= f; cap[v][prev[v]] += f; }
+  }
+  return Object.fromEntries(FIELD_LINES.map((L) => [L, cap[li[L]][T]]));
+}
+
 /** Convierte posiciones antiguas (DEF genérico) a las nuevas. */
 export function migratePositions(positions) {
   const out = [];
@@ -116,8 +191,8 @@ export function hungarian(cost) {
  */
 export function optimizeLineup({
   slots, players, current = {}, lockGK = false, gapMin = 6, gkCommitMin = null, hysteresisMin = 2, movePenaltyMin = 0.5,
-  minStintMin = 5, stintPenaltyMin = 15, linePenaltyMin = 1, offPenaltyMin = 2.5,
-  maxBenchMin = null, benchPenaltyMin = 8,
+  minStintMin = 5, stintPenaltyMin = 15, linePenaltyMin = 1, offPenaltyMin = 2.5, rankStepMin = 0.25,
+  maxBenchMin = null, benchPenaltyMin = 8, scarcity = null, reserveMin = 1,
 }) {
   const slotOf = {};
   const ids = new Set(players.map((p) => p.id));
@@ -161,14 +236,19 @@ export function optimizeLineup({
         v -= 2 * g * hysteresisMin;
         if (cs !== slot.id) v += 2 * g * (slot.role === 'POR' || roleOfSlot[cs] === 'POR' ? 3 : movePenaltyMin);
       }
+      // Las posiciones ceden ante la igualdad de minutos (ver positionCost). La
+      // portería es solo para porteros y un portero puro no juega de campo.
       const fit = fitFor(r.positions, slot);
-      // Las posiciones ceden ante la igualdad de minutos: misma línea si evita ~1' de
-      // diferencia, otra línea si evita ~2,5'. La portería, solo porteros.
-      if (fit === 'line') v += 2 * g * linePenaltyMin;
-      else if (fit === 'no') {
-        const onlyGK = (r.positions || []).length > 0 && r.positions.every((x) => x === 'POR');
-        // Un portero puro no juega de campo y la portería es solo para porteros.
-        v += slot.role === 'POR' || onlyGK ? 3 * OUT : 2 * g * offPenaltyMin;
+      const onlyGK = (r.positions || []).length > 0 && r.positions.every((x) => x === 'POR');
+      if (fit === 'no' && (slot.role === 'POR' || onlyGK)) v += 3 * OUT;
+      else v += 2 * g * positionCost(r.positions, slot, { rankStepMin, linePenaltyMin, offPenaltyMin });
+      // Reservar a los polivalentes: si este jugador sirve para una línea que va
+      // más justa que la de este puesto, cuesta un poco usarlo aquí.
+      if (scarcity && reserveMin && slot.role !== 'POR') {
+        const here = scarcity[ROLE_LINE[slot.role]] || 0;
+        let other = 0;
+        for (const rr of r.positions || []) { const L = ROLE_LINE[rr]; if (L !== 'POR' && L !== ROLE_LINE[slot.role]) other = Math.max(other, scarcity[L] || 0); }
+        if (other > here) v += 2 * g * reserveMin * Math.min(other - here, 1);
       }
       row[c] = v;
     }
@@ -243,7 +323,7 @@ function scorePlan(plan) {
   const subs = plan.changes.reduce((a, c) => a + c.subs.length, 0);
   const events = plan.changes.filter((c) => c.subs.length).length;
   const short = plan.changes.reduce((a, c) => a + (c.shortOuts || 0), 0);
-  return variance + 2 * short + 1.5 * (plan.benchExcessMin || 0) + 0.03 * subs + 0.25 * events;
+  return variance + 2 * short + 1.5 * (plan.benchExcessMin || 0) + 0.005 * (plan.posCost || 0) + 0.03 * subs + 0.25 * events;
 }
 
 /**
@@ -380,7 +460,7 @@ export function diffLineups(before, after) {
  */
 export function planMatch({
   slots, players, lineup, phase, halfSec = 0, halfLen, points: basePoints = [], handled = new Set(), gkHalftimeOnly = true, firstStep = null,
-  stepVariants = {}, forced = {}, mustChange = [], maxBenchMin = null,
+  stepVariants = {}, forced = {}, mustChange = [], maxBenchMin = null, minStintMin = 5,
 }) {
   handled = handled instanceof Set ? handled : new Set(handled);
   const played = Object.fromEntries(players.map((p) => [p.id, p.played || 0]));
@@ -424,6 +504,23 @@ export function planMatch({
   for (const p of players) {
     if (!Object.values(cur).includes(p.id) && !onlyGK(p)) benchStart[p.id] = nominal(pos) - (phase === 'pre' ? 0 : p.benched ?? 0);
   }
+  // Lo justa que va cada línea con estos convocados (para reservar a los polivalentes).
+  const scarcity = lineScarcity(slots, players);
+  // Minutos-equivalentes jugados fuera de la 1ª posición (para preferir planes con menos).
+  let posCost = 0;
+  let posFrom = nominal(pos);
+  const accPos = (lu, toNominal) => {
+    const dt = Math.max(0, toNominal - posFrom) / 60;
+    if (dt > 0) {
+      for (const sl of slots) {
+        const pid = lu[sl.id];
+        if (!pid || sl.role === 'POR') continue;
+        const pl = players.find((x) => x.id === pid);
+        if (pl) posCost += dt * positionCost(pl.positions, sl);
+      }
+    }
+    posFrom = Math.max(posFrom, toNominal);
+  };
   let benchExcess = 0;
   let benchMax = { sec: 0, id: null }; // el tramo seguido más largo en el banquillo
   const noteBench = (id, sec) => { if (sec > benchMax.sec) benchMax = { sec, id }; };
@@ -473,6 +570,8 @@ export function planMatch({
       gapMin,
       gkCommitMin,
       maxBenchMin,
+      minStintMin,
+      scarcity,
       // Margen para no cambiar por poco: proporcional al tramo que viene (al final del partido, menor).
       hysteresisMin: (point.halftime && !halftimeIsBoundary ? hysteresisMin * 3 : Math.min(hysteresisMin, hysteresisFor(gapMin * 60)))
         * ((i === 0 && firstStep ? firstStep : stepVariants[i])?.hysteresisMul ?? 1),
@@ -491,10 +590,11 @@ export function planMatch({
       });
       Object.assign(after, again);
     }
+    accPos(cur, nominal(point));
     const { subs, moves } = diffLineups(cur, after);
     let shortOuts = 0;
     for (const sb of subs) {
-      if (sb.out && stintStart[sb.out] != null && nominal(point) - stintStart[sb.out] < 300) shortOuts++;
+      if (sb.out && stintStart[sb.out] != null && nominal(point) - stintStart[sb.out] < minStintMin * 60) shortOuts++;
       if (sb.out) delete stintStart[sb.out];
       if (sb.in) stintStart[sb.in] = nominal(point);
       if (sb.in && benchStart[sb.in] != null) {
@@ -508,11 +608,12 @@ export function planMatch({
     cur = after;
   });
   advance({ h: 2, t: halfLen });
+  accPos(cur, 2 * halfLen);
   for (const [id, st] of Object.entries(benchStart)) {
     if (maxBenchSec) benchExcess += Math.max(0, 2 * halfLen - st - maxBenchSec);
     noteBench(id, 2 * halfLen - st);
   }
-  return { changes, projected: played, benchExcessMin: benchExcess / 60, benchMax };
+  return { changes, projected: played, benchExcessMin: benchExcess / 60, benchMax, posCost };
 }
 
 /**
@@ -628,6 +729,8 @@ const VARIANTS = [
   { hysteresisMul: 1, opts: { stintPenaltyMin: 12 } },
   { hysteresisMul: 1, gapMul: 2 }, { hysteresisMul: 1, gapMul: 0.5 },
   { hysteresisMul: 1, opts: { benchPenaltyMin: 5 } }, { hysteresisMul: 0.5, opts: { benchPenaltyMin: 30 } },
+  { hysteresisMul: 1, opts: { reserveMin: 1 } }, { hysteresisMul: 1, opts: { reserveMin: 3 } },
+  { hysteresisMul: 1, opts: { offPenaltyMin: 6, linePenaltyMin: 2.5 } },
 ];
 
 export function planMatchBest(params) {
@@ -667,4 +770,54 @@ export function planMatchRefined(params, { rounds = 2 } = {}) {
   }
   plan.stepVariants = chosen;
   return plan;
+}
+
+/** Diferencia entre el jugador de campo que más juega y el que menos (minutos). */
+export function fieldSpread(plan, players) {
+  const vals = players.filter((p) => !(p.positions || []).every((x) => x === 'POR')).map((p) => (plan.projected[p.id] || 0) / 60);
+  return vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
+}
+
+/**
+ * Elige momentos de cambio aplicando las reglas pedidas (mínimo seguido en el
+ * campo y máximo seguido en el banquillo). Como igualar minutos va primero, si
+ * con esta convocatoria esas reglas dejan una diferencia de más de `toleranceMin`,
+ * se relajan lo justo, paso a paso, y se usa la primera opción que iguala.
+ * Devuelve el resultado de chooseSchedule más { rules, relaxed }.
+ */
+export function chooseScheduleWithRules(base, { firstSec = null, current = null, minStintMin = 7, maxBenchMin = 8, toleranceMin = 2 } = {}) {
+  const tries = [];
+  const push = (m, b) => { if (!tries.some((t) => t.m === m && t.b === b)) tries.push({ m, b }); };
+  const mb = (b, d) => (b ? b + d : null);
+  const m1 = Math.max(5, minStintMin - 1);
+  push(minStintMin, maxBenchMin);
+  push(minStintMin, mb(maxBenchMin, 1));
+  push(m1, maxBenchMin);
+  push(m1, mb(maxBenchMin, 1));
+  push(5, maxBenchMin);
+  push(5, mb(maxBenchMin, 1));
+  push(5, mb(maxBenchMin, 2));
+  let best = null;
+  for (const t of tries) {
+    const b = { ...base, minStintMin: t.m, maxBenchMin: t.b };
+    const sched = chooseSchedule(b, { firstSec, current });
+    const plan = planMatchRefined({ ...b, points: sched.points, handled: new Set(sched.handledPast) });
+    const spread = fieldSpread(plan, base.players);
+    const cand = { ...sched, rules: { minStintMin: t.m, maxBenchMin: t.b }, spread };
+    if (!best || spread < best.spread - 0.5) best = cand;
+    if (spread <= toleranceMin) { best = cand; break; }
+  }
+  best.relaxed = best.rules.minStintMin !== minStintMin || best.rules.maxBenchMin !== maxBenchMin;
+  return best;
+}
+
+/**
+ * Avisos por líneas: si a la defensa (o al medio, o al ataque) le faltan
+ * jugadores para cubrir sus minutos con todos jugando lo mismo, alguien tendrá
+ * que jugar fuera de su sitio. Devuelve [{ line, scarcity }].
+ */
+export function lineWarnings(slots, players) {
+  const short = lineShortage(slots, players);
+  // Más de un tercio de jugador de hueco (unos 10 minutos de partido) merece aviso.
+  return Object.entries(short).filter(([, v]) => v > 0.34).map(([line, shortage]) => ({ line, shortage }));
 }
