@@ -1,6 +1,6 @@
 // Con conexión, siempre la última versión de la app (red primero); sin
 // conexión (p. ej. en el campo), la copia guardada.
-const CACHE = 'futbol7-v22';
+const CACHE = 'futbol7-v23';
 const ASSETS = [
   './',
   './index.html',
@@ -12,6 +12,7 @@ const ASSETS = [
   './icons/icon-180.png',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './sounds/rugido.mp3',
 ];
 
 self.addEventListener('install', (e) => {

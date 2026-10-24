@@ -3,7 +3,7 @@ import {
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
-export const APP_VERSION = 22;
+export const APP_VERSION = 23;
 let db = load();
 const ui = { tab: 'match', sel: null, injured: false, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
 
@@ -55,9 +55,24 @@ function posChips(positions, levels, backupGK) {
 // pitido principal es un <audio> normal (como un vídeo: suena aunque el iPhone
 // esté en silencio), que se desbloquea con el primer toque y después se puede
 // reproducir cuando haga falta. El audio web queda solo como respaldo.
+// El aviso puede ser un rugido de león (por defecto) o los pitidos de siempre (Ajustes).
 let audioCtx = null;
 let beepEl = null;
 let beepElReady = false;
+let roarEl = null;
+let roarElReady = false;
+let roarBuf = null; // rugido decodificado para el audio web de respaldo
+let roarWebUntil = 0;
+const ROAR_URL = 'sounds/rugido.mp3';
+// Se descarga entero al abrir la app y se reproduce desde memoria (blob): así
+// funciona sin conexión y Safari no pide el audio a trozos al service worker.
+let roarBytes = null;
+let roarBlobUrl = null;
+fetch(ROAR_URL).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status))).then((b) => {
+  roarBytes = b;
+  roarBlobUrl = URL.createObjectURL(new Blob([b], { type: 'audio/mpeg' }));
+}).catch(() => {});
+const useRoar = () => db.settings.alarmSound !== 'beep';
 
 function beepWavUrl() {
   // Tres pitidos (880/660/880 Hz) en un WAV generado al vuelo.
@@ -85,27 +100,70 @@ function beepWavUrl() {
   return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
 }
 
+function unlockEl(el, onReady) {
+  el.muted = true;
+  const pr = el.play();
+  const done = () => { el.pause(); el.currentTime = 0; el.muted = false; onReady(); refreshSoundHint(); };
+  if (pr) pr.then(done).catch(() => { el.muted = false; });
+  else done();
+}
+
 function ensureAudio() {
-  // 1) <audio> principal: se reproduce en silencio dentro del toque para desbloquearlo.
+  // 1) <audio> principales: se reproducen en silencio dentro del toque para desbloquearlos.
   try {
     if (!beepEl) {
       beepEl = new Audio(beepWavUrl());
       beepEl.preload = 'auto';
       beepEl.setAttribute('playsinline', '');
     }
-    if (!beepElReady) {
-      beepEl.muted = true;
-      const pr = beepEl.play();
-      const done = () => { beepEl.pause(); beepEl.currentTime = 0; beepEl.muted = false; beepElReady = true; refreshSoundHint(); };
-      if (pr) pr.then(done).catch(() => { beepEl.muted = false; });
-      else done();
+    if (!beepElReady) unlockEl(beepEl, () => { beepElReady = true; });
+    if (!roarEl && roarBlobUrl) {
+      roarEl = new Audio(roarBlobUrl);
+      roarEl.preload = 'auto';
+      roarEl.setAttribute('playsinline', '');
     }
+    if (roarEl && !roarElReady) unlockEl(roarEl, () => { roarElReady = true; });
   } catch (e) { /* sin audio */ }
   // 2) Audio web de respaldo.
   try {
     if (!audioCtx || audioCtx.state === 'closed') audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
+    if (!roarBuf && roarBytes) {
+      roarBuf = 'loading';
+      new Promise((ok, ko) => audioCtx.decodeAudioData(roarBytes.slice(0), ok, ko))
+        .then((buf) => { roarBuf = buf; }).catch(() => { roarBuf = null; });
+    }
   } catch (e) { /* sin audio */ }
+}
+
+function webRoar() {
+  if (!audioCtx || !(roarBuf instanceof AudioBuffer)) return false;
+  if (audioCtx.state !== 'running') { audioCtx.resume().catch(() => {}); return false; }
+  if (audioCtx.currentTime < roarWebUntil) return true; // aún está rugiendo
+  const src = audioCtx.createBufferSource();
+  src.buffer = roarBuf;
+  src.connect(audioCtx.destination);
+  src.start();
+  roarWebUntil = audioCtx.currentTime + roarBuf.duration;
+  return true;
+}
+
+/**
+ * Rugido. Si ya está sonando no se corta: la alarma lo vuelve a lanzar en cuanto
+ * acaba, así que mientras toca cambio suena sin parar.
+ */
+function roar() {
+  if (roarEl && roarElReady) {
+    try {
+      if (!roarEl.paused && !roarEl.ended) return;
+      roarEl.muted = false;
+      roarEl.currentTime = 0;
+      const pr = roarEl.play();
+      if (pr) pr.catch(() => { roarElReady = false; if (!webRoar()) webBeep(3); refreshSoundHint(); });
+      return;
+    } catch (e) { roarElReady = false; }
+  }
+  if (!webRoar()) webBeep(3);
 }
 
 function webBeep(times) {
@@ -127,8 +185,9 @@ function webBeep(times) {
   return true;
 }
 
-function beep(times = 3) {
+function beep(times = 3, { force = null } = {}) {
   try { navigator.vibrate?.([300, 150, 300, 150, 300]); } catch (e) { /* */ }
+  if (force === 'roar' || (force !== 'beep' && useRoar())) { roar(); return; }
   if (beepEl && beepElReady) {
     try {
       beepEl.muted = false;
@@ -141,9 +200,14 @@ function beep(times = 3) {
   webBeep(times);
 }
 
+/** Corta el rugido en cuanto se hacen (u omiten) los cambios. */
+function stopSound() {
+  try { if (roarEl && !roarEl.paused) { roarEl.pause(); roarEl.currentTime = 0; } } catch (e) { /* */ }
+}
+
 /** ¿Está el sonido listo? Si no, durante el partido se pide un toque para activarlo. */
 function soundReady() {
-  return beepElReady || (audioCtx && audioCtx.state === 'running');
+  return (useRoar() ? roarElReady : beepElReady) || (audioCtx && audioCtx.state === 'running');
 }
 function refreshSoundHint() {
   const el = document.getElementById('sound-hint');
@@ -1013,6 +1077,12 @@ function viewSettings() {
         ${[['7', '7 minutos'], ['8', '8 minutos'], ['9', '9 minutos'], ['10', '10 minutos'], ['0', 'Sin límite']].map(([v, l]) => `<option value="${v}" ${String(s.maxBench ?? 8) === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select></label>
     </div>
+    <div class="grid2">
+      <label>Sonido del aviso<select data-bind="settings.alarmSound">
+        ${[['lion', '🦁 Rugido de león'], ['beep', '🔔 Pitidos']].map(([v, l]) => `<option value="${v}" ${(s.alarmSound === 'beep' ? 'beep' : 'lion') === v ? 'selected' : ''}>${l}</option>`).join('')}
+      </select></label>
+      <button class="btn" data-action="test-sound" style="align-self:end">🔊 Probar</button>
+    </div>
     <p class="muted small">La app procura que nadie salga del campo antes del mínimo ni pase más del máximo seguido en el banquillo (los porteros que solo son porteros no cuentan). Igualar minutos va primero: si con una convocatoria no se puede cumplir todo, en la previa verás qué valores se aplican.</p>
   </section>
   <section class="card">
@@ -1195,7 +1265,7 @@ const actions = {
     const cur = obj.firstChange === undefined ? 480 : obj.firstChange || 480;
     setFirst(d.scope, Math.min(20, Math.max(2, Math.round(cur / 60) + Number(d.d))) * 60);
   },
-  'test-sound': () => { ensureAudio(); setTimeout(() => beep(3), 150); setTimeout(refreshSoundHint, 400); },
+  'test-sound': () => { ensureAudio(); stopSound(); setTimeout(() => beep(3), 400); setTimeout(refreshSoundHint, 600); },
   'cancel-sel': () => { ui.sel = null; ui.injured = false; render(); },
   'sub-recommended': () => {
     const L = db.live;
@@ -1429,7 +1499,7 @@ function alarmDue() {
 }
 function alarmTick() {
   const due = alarmDue();
-  if (due !== alarmOn) render();
+  if (due !== alarmOn) { if (!due) stopSound(); render(); }
   if (due) beep(3);
   refreshSoundHint();
 }
