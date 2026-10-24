@@ -3,7 +3,7 @@ import {
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
-export const APP_VERSION = 24;
+export const APP_VERSION = 25;
 let db = load();
 const ui = { tab: 'match', sel: null, injured: false, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
 
@@ -55,24 +55,9 @@ function posChips(positions, levels, backupGK) {
 // pitido principal es un <audio> normal (como un vídeo: suena aunque el iPhone
 // esté en silencio), que se desbloquea con el primer toque y después se puede
 // reproducir cuando haga falta. El audio web queda solo como respaldo.
-// El aviso puede ser un rugido de león (por defecto) o los pitidos de siempre (Ajustes).
 let audioCtx = null;
 let beepEl = null;
 let beepElReady = false;
-let roarEl = null;
-let roarElReady = false;
-let roarBuf = null; // rugido decodificado para el audio web de respaldo
-let roarWebUntil = 0;
-const ROAR_URL = 'sounds/rugido.mp3';
-// Se descarga entero al abrir la app y se reproduce desde memoria (blob): así
-// funciona sin conexión y Safari no pide el audio a trozos al service worker.
-let roarBytes = null;
-let roarBlobUrl = null;
-fetch(ROAR_URL).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status))).then((b) => {
-  roarBytes = b;
-  roarBlobUrl = URL.createObjectURL(new Blob([b], { type: 'audio/mpeg' }));
-}).catch(() => {});
-const useRoar = () => db.settings.alarmSound !== 'beep';
 
 function beepWavUrl() {
   // Tres pitidos (880/660/880 Hz) en un WAV generado al vuelo.
@@ -100,72 +85,27 @@ function beepWavUrl() {
   return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
 }
 
-function unlockEl(el, onReady) {
-  el.muted = true;
-  const pr = el.play();
-  const done = () => { el.pause(); el.currentTime = 0; el.muted = false; onReady(); refreshSoundHint(); };
-  if (pr) pr.then(done).catch(() => { el.muted = false; });
-  else done();
-}
-
 function ensureAudio() {
-  // 1) <audio> principales: se reproducen en silencio dentro del toque para desbloquearlos.
+  // 1) <audio> principal: se reproduce en silencio dentro del toque para desbloquearlo.
   try {
     if (!beepEl) {
       beepEl = new Audio(beepWavUrl());
       beepEl.preload = 'auto';
       beepEl.setAttribute('playsinline', '');
     }
-    if (!beepElReady) unlockEl(beepEl, () => { beepElReady = true; });
-    if (!roarEl && roarBlobUrl) {
-      roarEl = new Audio(roarBlobUrl);
-      roarEl.preload = 'auto';
-      roarEl.setAttribute('playsinline', '');
-      // Mientras dure la alarma, en cuanto acaba un rugido empieza el siguiente.
-      roarEl.addEventListener('ended', () => { if (alarmOn) roar(); });
+    if (!beepElReady) {
+      beepEl.muted = true;
+      const pr = beepEl.play();
+      const done = () => { beepEl.pause(); beepEl.currentTime = 0; beepEl.muted = false; beepElReady = true; refreshSoundHint(); };
+      if (pr) pr.then(done).catch(() => { beepEl.muted = false; });
+      else done();
     }
-    if (roarEl && !roarElReady) unlockEl(roarEl, () => { roarElReady = true; });
   } catch (e) { /* sin audio */ }
   // 2) Audio web de respaldo.
   try {
     if (!audioCtx || audioCtx.state === 'closed') audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
-    if (!roarBuf && roarBytes) {
-      roarBuf = 'loading';
-      new Promise((ok, ko) => audioCtx.decodeAudioData(roarBytes.slice(0), ok, ko))
-        .then((buf) => { roarBuf = buf; }).catch(() => { roarBuf = null; });
-    }
   } catch (e) { /* sin audio */ }
-}
-
-function webRoar() {
-  if (!audioCtx || !(roarBuf instanceof AudioBuffer)) return false;
-  if (audioCtx.state !== 'running') { audioCtx.resume().catch(() => {}); return false; }
-  if (audioCtx.currentTime < roarWebUntil) return true; // aún está rugiendo
-  const src = audioCtx.createBufferSource();
-  src.buffer = roarBuf;
-  src.connect(audioCtx.destination);
-  src.start();
-  roarWebUntil = audioCtx.currentTime + roarBuf.duration;
-  return true;
-}
-
-/**
- * Rugido. Si ya está sonando no se corta: la alarma lo vuelve a lanzar en cuanto
- * acaba, así que mientras toca cambio suena sin parar.
- */
-function roar() {
-  if (roarEl && roarElReady) {
-    try {
-      if (!roarEl.paused && !roarEl.ended) return;
-      roarEl.muted = false;
-      roarEl.currentTime = 0;
-      const pr = roarEl.play();
-      if (pr) pr.catch(() => { roarElReady = false; if (!webRoar()) webBeep(3); refreshSoundHint(); });
-      return;
-    } catch (e) { roarElReady = false; }
-  }
-  if (!webRoar()) webBeep(3);
 }
 
 function webBeep(times) {
@@ -187,9 +127,8 @@ function webBeep(times) {
   return true;
 }
 
-function beep(times = 3, { force = null } = {}) {
+function beep(times = 3) {
   try { navigator.vibrate?.([300, 150, 300, 150, 300]); } catch (e) { /* */ }
-  if (force === 'roar' || (force !== 'beep' && useRoar())) { roar(); return; }
   if (beepEl && beepElReady) {
     try {
       beepEl.muted = false;
@@ -202,14 +141,9 @@ function beep(times = 3, { force = null } = {}) {
   webBeep(times);
 }
 
-/** Corta el rugido en cuanto se hacen (u omiten) los cambios. */
-function stopSound() {
-  try { if (roarEl && !roarEl.paused) { roarEl.pause(); roarEl.currentTime = 0; } } catch (e) { /* */ }
-}
-
 /** ¿Está el sonido listo? Si no, durante el partido se pide un toque para activarlo. */
 function soundReady() {
-  return (useRoar() ? roarElReady : beepElReady) || (audioCtx && audioCtx.state === 'running');
+  return beepElReady || (audioCtx && audioCtx.state === 'running');
 }
 function refreshSoundHint() {
   const el = document.getElementById('sound-hint');
@@ -510,6 +444,9 @@ function saveMatchToHistory(L) {
     startLineup: L.startLineup || null,
     settingsUsed: L.settingsUsed || null,
   };
+  // Las mazitas ya repartidas se conservan si se vuelve a guardar (p. ej. al corregir el marcador).
+  const prev = db.matches.find((m) => m.id === record.id);
+  if (prev?.mazitas) record.mazitas = prev.mazitas;
   db.matches = [...db.matches.filter((m) => m.id !== record.id), record];
 }
 
@@ -640,6 +577,7 @@ function render() {
   if (ui.tab === 'match') html = db.live ? viewLive() : viewSetup();
   else if (ui.tab === 'squad') html = viewSquad();
   else if (ui.tab === 'stats') html = viewStats();
+  else if (ui.tab === 'mazitas') html = viewMazitas();
   else html = viewSettings();
   if (alarmOn && ui.tab !== 'match') {
     html = `<button class="alarm-bar" data-action="tab" data-tab="match">🔔 ¡Toca cambio! Toca aquí para ir al partido</button>` + html;
@@ -1021,6 +959,68 @@ function viewSummary(L) {
     <div class="banner-head">✅ Partido guardado</div>
     <p>${esc(db.settings.teamName)} ${L.goalsFor} – ${L.goalsAgainst} ${esc(L.rival || 'Rival')}</p>
     <p class="muted small">Diferencia entre quien más y quien menos ha jugado: ${mins(spread)}</p>
+  </section>
+  ${db.matches.some((m) => m.id === L.id) ? `<section class="card"><h3>🏅 Mazitas del partido</h3>${mazitasEditor(db.matches.find((m) => m.id === L.id))}</section>` : ''}`;
+}
+
+// ---------- mazitas ----------
+// En cada partido se reparten 3, 2 y 1 mazitas a los que mejor han jugado.
+const MAZITA_POINTS = [3, 2, 1];
+const mazitaWord = (n) => (n === 1 ? 'mazita' : 'mazitas');
+
+function mazitasEditor(match) {
+  const mz = match.mazitas || {};
+  const people = [...(match.players || [])]
+    .map((r) => ({ id: r.id, name: playerById(r.id)?.name ?? r.name }))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return `<div class="mazitas-edit">${MAZITA_POINTS.map((pts) => `<label class="mz-row"><span class="mz-pts">${pts} ${mazitaWord(pts)}</span>
+      <select data-action="set-mazita" data-match="${match.id}" data-pts="${pts}">
+        <option value="">— Sin asignar —</option>
+        ${people.map((p) => `<option value="${p.id}" ${mz[pts] === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+      </select></label>`).join('')}</div>`;
+}
+
+function mazitasTotals() {
+  const t = {};
+  for (const m of db.matches) {
+    for (const pts of MAZITA_POINTS) {
+      const id = m.mazitas?.[pts];
+      if (!id) continue;
+      const name = playerById(id)?.name ?? m.players?.find((r) => r.id === id)?.name ?? '?';
+      t[id] ||= { id, name, total: 0, by: { 3: 0, 2: 0, 1: 0 } };
+      t[id].total += pts;
+      t[id].by[pts] += 1;
+    }
+  }
+  return Object.values(t).sort((a, b) => b.total - a.total || b.by[3] - a.by[3] || b.by[2] - a.by[2] || String(a.name).localeCompare(String(b.name)));
+}
+
+function viewMazitas() {
+  const totals = mazitasTotals();
+  let rank = 0;
+  let prevKey = null;
+  const rows = totals.map((r, i) => {
+    const key = `${r.total}-${r.by[3]}-${r.by[2]}`;
+    if (key !== prevKey) rank = i + 1;
+    prevKey = key;
+    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : rank;
+    return `<tr><td class="num-c">${medal}</td><td>${esc(r.name)}</td><td class="num-c"><b>${r.total}</b></td><td class="num-c">${r.by[3]}</td><td class="num-c">${r.by[2]}</td><td class="num-c">${r.by[1]}</td></tr>`;
+  }).join('');
+  const matches = [...db.matches].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const pending = matches.filter((m) => MAZITA_POINTS.some((p) => !m.mazitas?.[p])).length;
+  const list = matches.map((m) => `<details class="mz-match" ${MAZITA_POINTS.some((p) => !m.mazitas?.[p]) ? 'open' : ''}>
+      <summary><b>${esc(m.rival || 'Rival')}</b> <span class="muted small">${fmtDate(m.date)} · ${m.goalsFor ?? 0} – ${m.goalsAgainst ?? 0}</span>
+        <span class="muted small mz-sum">${MAZITA_POINTS.map((p) => (m.mazitas?.[p] ? `${p}: ${esc(playerById(m.mazitas[p])?.name ?? m.players?.find((r) => r.id === m.mazitas[p])?.name ?? '?')}` : '')).filter(Boolean).join(' · ') || 'Sin repartir'}</span></summary>
+      ${mazitasEditor(m)}
+    </details>`).join('');
+  return `<section class="card">
+    <h2>🏅 Mazitas · temporada</h2>
+    ${rows ? `<table class="table"><thead><tr><th></th><th>Jugador</th><th>Total</th><th>×3</th><th>×2</th><th>×1</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted small">×3, ×2, ×1 = veces que ha recibido 3, 2 o 1 mazitas. A igualdad de total, va antes quien tiene más de 3 y después más de 2.</p>` : '<p class="muted">Todavía no se han repartido mazitas.</p>'}
+  </section>
+  <section class="card">
+    <h2>Por partido</h2>
+    ${matches.length ? `<p class="muted small">En cada partido: 3, 2 y 1 mazitas a los que mejor han jugado.${pending ? ` Falta repartir en <b>${pending}</b> ${pending === 1 ? 'partido' : 'partidos'}.` : ''}</p>${list}` : '<p class="muted">Aún no hay partidos. Al terminar un partido podrás repartir las mazitas.</p>'}
   </section>`;
 }
 
@@ -1078,12 +1078,6 @@ function viewSettings() {
       <label>Máximo seguido en el banquillo<select data-bind="settings.maxBench">
         ${[['7', '7 minutos'], ['8', '8 minutos'], ['9', '9 minutos'], ['10', '10 minutos'], ['0', 'Sin límite']].map(([v, l]) => `<option value="${v}" ${String(s.maxBench ?? 8) === v ? 'selected' : ''}>${l}</option>`).join('')}
       </select></label>
-    </div>
-    <div class="grid2">
-      <label>Sonido del aviso<select data-bind="settings.alarmSound">
-        ${[['lion', '🦁 Rugido de león'], ['beep', '🔔 Pitidos']].map(([v, l]) => `<option value="${v}" ${(s.alarmSound === 'beep' ? 'beep' : 'lion') === v ? 'selected' : ''}>${l}</option>`).join('')}
-      </select></label>
-      <button class="btn" data-action="test-sound" style="align-self:end">🔊 Probar</button>
     </div>
     <p class="muted small">La app procura que nadie salga del campo antes del mínimo ni pase más del máximo seguido en el banquillo (los porteros que solo son porteros no cuentan). Igualar minutos va primero: si con una convocatoria no se puede cumplir todo, en la previa verás qué valores se aplican.</p>
   </section>
@@ -1204,6 +1198,8 @@ function renderModal() {
       </div>
       <p class="muted">${FORMATIONS[match.formation]?.name ?? ''}</p>
       <table class="table"><thead><tr><th>Jugador</th><th>Minutos</th></tr></thead><tbody>${rows}</tbody></table>
+      <h3>🏅 Mazitas</h3>
+      ${mazitasEditor(match)}
       ${matchLogHtml(match)}
       <div class="toolbar">
         <button class="btn danger-outline" data-action="delete-match" data-id="${match.id}">Eliminar partido</button>
@@ -1267,7 +1263,7 @@ const actions = {
     const cur = obj.firstChange === undefined ? 480 : obj.firstChange || 480;
     setFirst(d.scope, Math.min(20, Math.max(2, Math.round(cur / 60) + Number(d.d))) * 60);
   },
-  'test-sound': () => { ensureAudio(); stopSound(); setTimeout(() => beep(3), 400); setTimeout(refreshSoundHint, 600); },
+  'test-sound': () => { ensureAudio(); setTimeout(() => beep(3), 150); setTimeout(refreshSoundHint, 400); },
   'cancel-sel': () => { ui.sel = null; ui.injured = false; render(); },
   'sub-recommended': () => {
     const L = db.live;
@@ -1416,6 +1412,19 @@ document.addEventListener('change', (e) => {
     persist(); render();
     return;
   }
+  if (el.dataset.action === 'set-mazita') {
+    const m = db.matches.find((x) => x.id === el.dataset.match);
+    if (!m) return;
+    const pts = Number(el.dataset.pts);
+    const mz = { ...(m.mazitas || {}) };
+    // Cada jugador solo puede recibir una de las tres en un mismo partido.
+    for (const p of MAZITA_POINTS) if (el.value && mz[p] === el.value) delete mz[p];
+    if (el.value) mz[pts] = el.value; else delete mz[pts];
+    m.mazitas = mz;
+    persist();
+    if (ui.modal?.type === 'match') renderModal(); else render();
+    return;
+  }
   if (el.dataset.action === 'toggle-available' || el.dataset.action === 'toggle-squad') {
     actions[el.dataset.action](el.dataset);
     return;
@@ -1501,7 +1510,7 @@ function alarmDue() {
 }
 function alarmTick() {
   const due = alarmDue();
-  if (due !== alarmOn) { if (!due) stopSound(); render(); }
+  if (due !== alarmOn) render();
   if (due) beep(3);
   refreshSoundHint();
 }

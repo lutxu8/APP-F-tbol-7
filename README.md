@@ -14,13 +14,14 @@ No necesita servidor ni cuentas: los datos se guardan en el propio teléfono y f
 - **Durante el partido**:
   - Reloj por partes (2 × 25 min), con pausa y tiempo añadido.
   - Minutos de cada jugador en tiempo real.
-  - Cuenta atrás hasta el próximo cambio. El **próximo cambio queda fijado** en cuanto se anuncia (minuto, quién entra, quién sale y en qué puesto) y el aviso será exactamente ese; solo se vuelve a calcular si haces un cambio a mano, deshaces o alguien deja de estar disponible. Cuando toca, aparece “¡Toca cambio!” con quién entra, quién sale y en qué puesto, y salta una **alarma que no para** (un **rugido de león** detrás de otro, o pitidos si lo eliges en *Ajustes → Sonido del aviso*; la pantalla parpadea y, si estás en otra pestaña, sale una barra para volver al partido) hasta que pulsas **Hacer cambios** (u **Omitir**).
+  - Cuenta atrás hasta el próximo cambio. El **próximo cambio queda fijado** en cuanto se anuncia (minuto, quién entra, quién sale y en qué puesto) y el aviso será exactamente ese; solo se vuelve a calcular si haces un cambio a mano, deshaces o alguien deja de estar disponible. Cuando toca, aparece “¡Toca cambio!” con quién entra, quién sale y en qué puesto, y salta una **alarma que no para** (pitido cada segundo y medio, la pantalla parpadea y, si estás en otra pestaña, sale una barra para volver al partido) hasta que pulsas **Hacer cambios** (u **Omitir**).
   - **Cambio no previsto** (lesión, cansancio...): toca al jugador en el campo y la app te dice quién debe entrar (el del banquillo que encaja en ese puesto y menos ha jugado), con otras opciones ordenadas. Si marcas *Lesionado*, ya no vuelve a contar para el partido. Tras el cambio, se reorganizan todos los cambios siguientes.
   - También puedes tocar un jugador y después otro (del campo o del banquillo) para intercambiarlos.
   - Alguien que llega tarde o se va: márcalo como *No disponible* / *Disponible* en la tabla de minutos.
   - Marcador, **Deshacer**, y la pantalla se mantiene encendida.
 - **Rival y fecha**: se ponen al preparar el partido (en los dos pasos de *Nuevo partido*). En la previa o durante el partido, toca el nombre del rival en el marcador para cambiarlo.
 - **Estadísticas**: convocatorias, partidos jugados, minutos totales y media por jugador, e historial de partidos con **buscador por rival**. Al abrir un partido puedes corregir el rival y la fecha. En cada partido, el **registro de cambios**: configuración usada, once inicial y cada cambio con su minuto y puesto (avisa si alguien jugó fuera de su posición).
+- **Mazitas**: en cada partido se reparten 3, 2 y 1 mazitas a los que mejor han jugado. Se apuntan al terminar el partido (debajo de *Partido guardado*), al abrir un partido en *Estadísticas* o en la pestaña **🏅 Mazitas**. Esa pestaña muestra la clasificación de la temporada (total y cuántas veces ha recibido cada uno 3, 2 o 1) y, partido a partido, quién las recibió; los partidos sin repartir salen abiertos. A igualdad de total, va antes quien tiene más de 3 y después más de 2.
 - **Compartir y copia de seguridad**: *Ajustes → Exportar / compartir* abre el menú de compartir del iPhone (WhatsApp, AirDrop, Correo, Guardar en Archivos…) con un archivo `.json` con la plantilla, los partidos y los ajustes. Quien lo recibe lo guarda (iPhone: app **Archivos**; Android: queda en **Descargas**) y, en su app, pulsa *Ajustes → Importar archivo*. Alternativa sin archivos: *Copiar como texto*, enviarlo en un mensaje y, en el otro móvil, copiar el mensaje y usar *Pegar texto*. Importar **sustituye** todos los datos de ese móvil.
 
 ### Cómo decide los cambios
@@ -58,4 +59,3 @@ node --test tests/*.test.mjs   # pruebas de la lógica de rotaciones
 - `js/app.js`: interfaz.
 - `js/store.js`: guardado en el dispositivo.
 - `sw.js` y `manifest.webmanifest`: uso sin conexión e instalación.
-- `sounds/rugido.mp3`: sonido del aviso (rugido de león, «cartoon lion roar» de Dragon Studio).
