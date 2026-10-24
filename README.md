@@ -58,3 +58,4 @@ node --test tests/*.test.mjs   # pruebas de la lógica de rotaciones
 - `js/app.js`: interfaz.
 - `js/store.js`: guardado en el dispositivo.
 - `sw.js` y `manifest.webmanifest`: uso sin conexión e instalación.
+- `sounds/rugido.mp3`: sonido del aviso (rugido de león, «cartoon lion roar» de Dragon Studio).

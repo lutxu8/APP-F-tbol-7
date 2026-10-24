@@ -3,7 +3,7 @@ import {
 } from './logic.js';
 import { load, save, exportJSON, importJSON, uid } from './store.js';
 
-export const APP_VERSION = 23;
+export const APP_VERSION = 24;
 let db = load();
 const ui = { tab: 'match', sel: null, injured: false, modal: null, setupStep: 1, alerted: new Set(), plan: null, next: null };
 
@@ -121,6 +121,8 @@ function ensureAudio() {
       roarEl = new Audio(roarBlobUrl);
       roarEl.preload = 'auto';
       roarEl.setAttribute('playsinline', '');
+      // Mientras dure la alarma, en cuanto acaba un rugido empieza el siguiente.
+      roarEl.addEventListener('ended', () => { if (alarmOn) roar(); });
     }
     if (roarEl && !roarElReady) unlockEl(roarEl, () => { roarElReady = true; });
   } catch (e) { /* sin audio */ }
